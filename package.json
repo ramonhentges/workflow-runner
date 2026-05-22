@@ -1,0 +1,23 @@
+{
+  "name": "acp-test",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun src/index.ts",
+    "build": "bun build ./src/index.ts --outdir ./build --target=node",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "^0.22.1",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@opentui/core": "^0.2.15"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.41",
+    "bun-types": "^1.3.14",
+    "tsx": "^4.0.0",
+    "typescript": "^5.5.0"
+  }
+}

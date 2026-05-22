@@ -1,0 +1,44 @@
+{
+  "id": "who-is",
+  "name": "New workflow",
+  "description": "in this workflow the agent will write its name at ./agent.txt",
+  "steps": [
+    {
+      "id": "step-1",
+      "agent": "architect-advisor/AGENT",
+      "description": "Write your name at ./agent.txt, then call the handoff tool choosing the next agent based on the user's intent and the available handoff targets.",
+      "mode": "interactive",
+      "ide": "opencode",
+      "model": "opencode/big-pickle",
+      "edges": [
+        {
+          "next_step": "step-2",
+          "intent": "Route to step-2 (devils-advocate) when the user asks for step-2 or critical analysis"
+        },
+        {
+          "next_step": "step-3",
+          "intent": "Route to step-3 (pragmatic-engineer) when the user asks for step-3 or pragmatic execution"
+        }
+      ]
+    },
+    {
+      "id": "step-2",
+      "agent": "devils-advocate/AGENT",
+      "description": "in this step the agent will write its name at ./agent-2.txt",
+      "mode": "autonomous",
+      "ide": "opencode",
+      "model": "opencode/big-pickle",
+      "edges": []
+    },
+    {
+      "id": "step-3",
+      "agent": "pragmatic-engineer/AGENT",
+      "description": "in this step the agent will write its name at ./agent-3.txt",
+      "mode": "autonomous",
+      "ide": "opencode",
+      "model": "opencode/big-pickle",
+      "edges": []
+    }
+  ],
+  "version": "1"
+}

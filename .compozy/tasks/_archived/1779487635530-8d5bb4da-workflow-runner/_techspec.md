@@ -149,7 +149,7 @@ The runner exposes no HTTP API to users. Its only programmatic surface is the tw
 ## Integration Points
 
 - **opencode via ACP** — one `opencode acp` subprocess per step, ACP/JSON-RPC over ndjson stdio (the pattern already in `index.ts`). The runner verifies `agentCapabilities.mcpCapabilities.http` at `initialize` and exits with a clear message if absent. `OPENCODE_ENABLE_QUESTION_TOOL=1` is kept in the subprocess env.
-- **`@modelcontextprotocol/sdk`** — new dependency. Hosts the `handoff`/`finish` tools over the Streamable HTTP transport, bound to an ephemeral `127.0.0.1` port resolved before the first session is created. No authentication (loopback only; `headers: []`).
+- **In-process HTTP MCP server** — a minimal hand-rolled JSON-RPC/HTTP endpoint (using `node:http`) that hosts the `handoff`/`finish` tools, bound to an ephemeral `127.0.0.1` port resolved before the first session is created. No authentication (loopback only; `headers: []`).
 
 ## Impact Analysis
 
@@ -157,10 +157,10 @@ The runner exposes no HTTP API to users. Its only programmatic surface is the tw
 |---|---|---|---|
 | `src/index.ts` | modified | Rewritten from a single-session loop into CLI entry + TUI host wired to `runner`. Medium risk — largest change. | Parse `<workflow.json>` and `--start`; build TUI; implement `RunnerUi`; call `runWorkflow`. |
 | `src/workflow.ts` | new | Config types and `loadWorkflow` validator. Low risk — pure logic. | Create module with types + validation. |
-| `src/mcp.ts` | new | In-process HTTP MCP server. Medium risk — new dependency, port binding, lifecycle. | Create module; manage server start/close. |
+| `src/mcp.ts` | new | In-process HTTP MCP server (hand-rolled JSON-RPC/HTTP). Medium risk — port binding, lifecycle. | Create module; manage server start/close. |
 | `src/runner.ts` | new | Orchestration loop and failure handling. Medium risk — concurrency between turns and tool callbacks. | Create module implementing `runWorkflow`. |
 | `src/client.ts` | unchanged | `AcpClient` reused per step via a fresh instance. No risk. | None. |
-| `package.json` | modified | Add `@modelcontextprotocol/sdk`; add `test` script (`bun test`). Low risk. | Update dependencies and scripts. |
+| `package.json` | modified | Add `test` script (`bun test`). Low risk. | Update scripts. |
 | `workflows/who-is.json` | unchanged | Serves as the manual E2E fixture. No risk. | None. |
 
 ## Testing Approach
@@ -195,12 +195,11 @@ Environment dependency: `opencode` on `PATH`, authenticated, with the `big-pickl
 4. **MCP unit tests** — handoff target resolution and summary formatting. Depends on step 3 (and the `RunSummary` type from step 5's declarations; declare shared types in step 1/3 first).
 5. **`runner.ts`** — `runWorkflow`: per-step session lifecycle, `setSessionMode`/`setSessionModel`, kickoff composition, outcome handling, failure detection, summary. Depends on steps 1 and 3, and reuses `client.ts`.
 6. **`index.ts` rewrite** — CLI parsing (`<workflow.json>`, `--start`), TUI construction, `RunnerUi` implementation (banners, log, input show/hide, summary), wiring to `createWorkflowMcpServer` and `runWorkflow`. Depends on steps 1, 3, and 5.
-7. **`package.json` update** — add `@modelcontextprotocol/sdk` and the `test` script. Required before steps 3 and 6 can run; sequenced here as it has no code dependency but must precede execution.
+7. **`package.json` update** — add the `test` script (`bun test`). Required before execution.
 8. **Manual E2E pass** — run `who-is.json` and the failure checks. Depends on all prior steps.
 
 ### Technical Dependencies
 
-- `@modelcontextprotocol/sdk` must be installed before `mcp.ts` runs.
 - `opencode` CLI on `PATH`, authenticated, must report `mcpCapabilities.http: true` — confirmed against opencode's native remote-MCP support.
 - `bun` runtime (already in use).
 

@@ -11,7 +11,6 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^0.22.1",
-    "@modelcontextprotocol/sdk": "^1.29.0",
     "@opentui/core": "^0.2.15"
   },
   "devDependencies": {

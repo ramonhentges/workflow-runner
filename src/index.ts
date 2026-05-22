@@ -142,11 +142,11 @@ function setInteractive(enabled: boolean) {
 }
 
 const createRunnerUi = (): RunnerUi => ({
-  banner: (step: Step, index: number, total: number) => {
+  banner: (step: Step, index: number) => {
     log("", C.dim);
     log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, C.dim);
     log(
-      `Step ${index}/${total}: ${step.id} [${step.agent} / ${step.model}]`,
+      `Step ${index}: ${step.id} [${step.agent} / ${step.model}]`,
       C.cyan,
     );
     log(`Mode: ${step.mode}`, C.dim);
@@ -185,6 +185,8 @@ const createRunnerUi = (): RunnerUi => ({
     } else {
       setStatus("Workflow completed", C.green);
     }
+    setInteractive(true);
+    inputField?.focus();
   },
 });
 

@@ -7,11 +7,6 @@ export type StepOutcome =
   | { kind: "finish"; message: string }
   | { kind: "failure"; failedStep: string; reason: string };
 
-export interface StepContext {
-  step: Step;
-  inboundMessage: string | null;
-}
-
 export interface WorkflowMcpServer {
   readonly url: string;
   beginStep(step: Step, resolve: (outcome: StepOutcome) => void): string;
@@ -121,6 +116,12 @@ export async function createWorkflowMcpServer(): Promise<WorkflowMcpServer> {
     const method = req.jsonrpc === "2.0" ? req.method : "unknown";
     const requestStepToken = headers["x-workflow-step-token"];
 
+    if (method === "notifications/initialized") {
+      res.writeHead(202);
+      res.end();
+      return;
+    }
+
     if (!res.headersSent) {
       res.writeHead(200, {
         "Content-Type": "application/json",
@@ -145,11 +146,6 @@ export async function createWorkflowMcpServer(): Promise<WorkflowMcpServer> {
           },
         }),
       );
-      return;
-    }
-
-    if (method === "notifications/initialized") {
-      res.end(JSON.stringify({ jsonrpc: "2.0" }));
       return;
     }
 

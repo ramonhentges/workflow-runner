@@ -41,13 +41,12 @@ export interface RunSummary {
 }
 
 export interface RunnerUi {
-  banner(step: Step, index: number, total: number): void;
+  banner(step: Step, index: number): void;
   log(message: string, color?: string): void;
   appendStream(type: string, chunk: string, color?: string): void;
   setInteractive(enabled: boolean): void;
   setStatus(text: string, color?: string): void;
   summary(summary: RunSummary): void;
-  onUserInput?(text: string): Promise<void>;
 }
 
 interface StepSession {
@@ -94,7 +93,6 @@ export async function runWorkflow(opts: RunOptions): Promise<RunSummary> {
   const steps = new Map(workflow.steps.map((s) => [s.id, s]));
 
   let stepIndex = 1;
-  const totalSteps = workflow.steps.length;
   let iterationCount = 0;
 
   while (true) {
@@ -117,7 +115,7 @@ export async function runWorkflow(opts: RunOptions): Promise<RunSummary> {
     }
 
     visited.push(step.id);
-    ui.banner(step, stepIndex, totalSteps);
+    ui.banner(step, stepIndex);
     stepIndex++;
 
     let session: StepSession | null = null;

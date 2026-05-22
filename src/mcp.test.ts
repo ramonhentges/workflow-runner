@@ -708,4 +708,19 @@ describe("WorkflowMcpServer", () => {
     const data = (await response.json()) as Record<string, unknown>;
     expect(data.error).toContain("Invalid JSON");
   });
+
+  it("responds to notifications/initialized with 202 Accepted and empty body", async () => {
+    const response = await fetch(`${server.url}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        method: "notifications/initialized",
+      }),
+    });
+
+    expect(response.status).toBe(202);
+    const text = await response.text();
+    expect(text).toBe("");
+  });
 });

@@ -112,5 +112,6 @@ dist
 # TernJS port file
 .tern-port
 
+bin/
 build/
 .claude/

@@ -6,25 +6,27 @@ import {
   InputRenderable,
   InputRenderableEvents,
 } from "@opentui/core";
-import type { KeyEvent } from "@opentui/core";
+import type { CliRenderer, KeyEvent } from "@opentui/core";
 
 import type {
   RunnerEvent,
-  RunnerObserver,
   RunSummary,
   StreamKind,
 } from "../../domain/runner.js";
 import { formatRunSummary } from "../../domain/runner.js";
-import type { Runner } from "../../domain/runner.js";
+import type { TuiEventSource } from "./event-source.js";
 import { C } from "./theme.js";
 
-type Renderer = Awaited<ReturnType<typeof createCliRenderer>>;
+type Renderer = CliRenderer;
+
+const DETACH_BANNER = "run still alive — `attach` to return";
 
 export interface TuiHooks {
-  onQuit?: () => void;
+  exit?: (code: number) => void;
+  writeBanner?: (message: string) => void;
 }
 
-export class Tui implements RunnerObserver {
+export class Tui {
   #renderer: Renderer;
   #statusText: TextRenderable;
   #logScroll: ScrollBoxRenderable;
@@ -34,9 +36,11 @@ export class Tui implements RunnerObserver {
   #msgCounter = 0;
   #streamedEl: { el: TextRenderable; kind: StreamKind; text: string } | null = null;
   #inPrompt = false;
-  #attachedRunner: Runner | null = null;
+  #attachedSource: TuiEventSource | null = null;
   #detachListeners: Array<() => void> = [];
   #hooks: TuiHooks;
+  #shutdownInProgress = false;
+  #rendererDestroyed = false;
 
   private constructor(init: {
     renderer: Renderer;
@@ -54,11 +58,15 @@ export class Tui implements RunnerObserver {
     this.#hooks = init.hooks;
   }
 
-  static async create(hooks: TuiHooks = {}): Promise<Tui> {
-    const renderer = await createCliRenderer({
-      exitOnCtrlC: false,
-      clearOnShutdown: true,
-    });
+  static async create(
+    opts: { hooks?: TuiHooks; renderer?: Renderer } = {},
+  ): Promise<Tui> {
+    const renderer =
+      opts.renderer ??
+      (await createCliRenderer({
+        exitOnCtrlC: false,
+        clearOnShutdown: true,
+      }));
 
     const statusText = new TextRenderable(renderer, {
       id: "status",
@@ -136,31 +144,35 @@ export class Tui implements RunnerObserver {
       logScroll,
       inputField,
       inputBar,
-      hooks,
+      hooks: opts.hooks ?? {},
     });
   }
 
-  attach(runner: Runner): () => void {
-    if (this.#attachedRunner) {
-      throw new Error("Tui is already attached to a runner");
+  attachSource(source: TuiEventSource): () => void {
+    if (this.#attachedSource) {
+      throw new Error("Tui is already attached to a source");
     }
-    this.#attachedRunner = runner;
-    const detachObserver = runner.addObserver(this);
+    this.#attachedSource = source;
+
+    const unsubscribe = source.subscribe((event) => this.onEvent(event));
 
     const enterHandler = (value: string) => {
-      this.handleInput(runner, value);
+      void this.submitInput(value);
     };
     this.#inputField.on(InputRenderableEvents.ENTER, enterHandler);
 
     const keyHandler = (key: KeyEvent) => {
       if (key.ctrl && key.name === "c") {
-        this.#hooks.onQuit?.();
+        // Ctrl-C kills the TUI only; the run continues without an explicit
+        // detach RPC (the daemon will clean up the subscription when the
+        // socket closes).
+        void this.shutdownWithBanner({ callDetach: false });
       }
     };
     this.#renderer.keyInput.on("keypress", keyHandler);
 
     this.#detachListeners.push(
-      detachObserver,
+      unsubscribe,
       () => this.#inputField.off(InputRenderableEvents.ENTER, enterHandler),
       () => this.#renderer.keyInput.off("keypress", keyHandler),
     );
@@ -177,12 +189,15 @@ export class Tui implements RunnerObserver {
       }
     }
     this.#detachListeners = [];
-    this.#attachedRunner = null;
+    this.#attachedSource = null;
   }
 
   shutdown(): void {
     this.detach();
-    this.#renderer.destroy();
+    if (!this.#rendererDestroyed) {
+      this.#rendererDestroyed = true;
+      this.#renderer.destroy();
+    }
   }
 
   onEvent(event: RunnerEvent): void {
@@ -208,16 +223,26 @@ export class Tui implements RunnerObserver {
     }
   }
 
-  private async handleInput(runner: Runner, text: string): Promise<void> {
+  async submitInput(text: string): Promise<void> {
+    const source = this.#attachedSource;
+    if (!source) return;
+
     const trimmed = text.trim();
     if (!trimmed) return;
 
-    this.appendLog(`> ${trimmed}`, C.blue);
-
-    if (trimmed === "/quit" || trimmed === "/exit") {
-      this.#hooks.onQuit?.();
+    if (trimmed === "/detach") {
+      this.appendLog(`> ${trimmed}`, C.blue);
+      await this.shutdownWithBanner({ callDetach: true });
       return;
     }
+
+    if (trimmed === "/quit" || trimmed === "/exit") {
+      this.appendLog(`> ${trimmed}`, C.blue);
+      await this.shutdownWithBanner({ callDetach: false });
+      return;
+    }
+
+    this.appendLog(`> ${trimmed}`, C.blue);
 
     if (this.#inPrompt) return;
 
@@ -225,7 +250,7 @@ export class Tui implements RunnerObserver {
     this.#inPrompt = true;
     this.#inputField.value = "";
     try {
-      await runner.provideInput(trimmed);
+      await source.sendInput(trimmed);
     } catch (err) {
       const msg = String(err);
       if (
@@ -239,6 +264,35 @@ export class Tui implements RunnerObserver {
       this.#inPrompt = false;
       this.#inputField.focus();
     }
+  }
+
+  private async shutdownWithBanner(opts: {
+    callDetach: boolean;
+  }): Promise<void> {
+    if (this.#shutdownInProgress) return;
+    this.#shutdownInProgress = true;
+
+    const source = this.#attachedSource;
+    if (opts.callDetach && source) {
+      try {
+        await source.detach();
+      } catch {
+        // Best-effort: the user asked to detach; if the RPC fails we still
+        // tear down the TUI so they regain their terminal.
+      }
+    }
+
+    this.shutdown();
+
+    const writeBanner =
+      this.#hooks.writeBanner ??
+      ((message: string) => {
+        process.stderr.write(`${message}\n`);
+      });
+    writeBanner(DETACH_BANNER);
+
+    const exit = this.#hooks.exit ?? ((code: number) => process.exit(code));
+    exit(0);
   }
 
   private flushStream(): void {

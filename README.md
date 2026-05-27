@@ -1,6 +1,6 @@
 # Workflow Runner
 
-A terminal application that executes multi-step agent workflows defined in JSON config files.
+A terminal application that supervises multi-step agent workflows defined in JSON config files. Runs as a background daemon; one CLI is used to start, attach to, list, message, retry, and stop runs.
 
 ## Quick Start
 
@@ -8,34 +8,56 @@ A terminal application that executes multi-step agent workflows defined in JSON 
 
 - `opencode` CLI installed and authenticated
 - `big-pickle` model available in opencode
-- Node.js and Bun installed
+- [Bun](https://bun.sh) installed (the `bin` entry resolves to `./src/index.ts` and is launched via `workflow-runner` after link)
 
-### Running a Workflow
-
-```bash
-bun src/index.ts workflows/who-is.json
-```
-
-To start from a specific step:
+### Install
 
 ```bash
-bun src/index.ts workflows/who-is.json --start step-2
+bun install
+bun link              # exposes `workflow-runner` on $PATH
 ```
+
+Or run without linking by running dev script directly: `bun dev <subcommand> ...`.
+
+### Starting a Workflow
+
+```bash
+workflow-runner start workflows/who-is.json
+```
+
+The daemon is auto-spawned on first invocation. `start` auto-attaches a TUI when stdout is a TTY; pass `--detach`/`-d` to start in the background.
+
+## CLI Surface
+
+| Command | Description |
+|---|---|
+| `workflow-runner start <workflow.json> [--detach\|-d]` | Start a new run. Auto-attaches the TUI on a TTY, prints `<runId> <slug>` otherwise. |
+| `workflow-runner attach [<run-id>]` | Attach the TUI to a running run. Resolves an unambiguous prefix of id or slug. |
+| `workflow-runner ps [--all\|-a]` | List runs. Active first, then terminal-state runs from the last 24h. |
+| `workflow-runner send <run-id> <message\|->` | Queue a user message for an interactive run. `-` reads from stdin. |
+| `workflow-runner retry-step <run-id>` | Re-spawn the failing step of a `crashed`/`failed`/`aborted` run. |
+| `workflow-runner stop <run-id>` | Graceful-then-forceful stop; run reaches `aborted`. |
+| `workflow-runner doctor` | Print the daemon health report (socket, lockfile, active runs, disk usage). |
+| `workflow-runner daemon` | Run the daemon process in the foreground (normally auto-spawned, exposed for diagnostics). |
+
+Detach from an attached TUI with the `/detach` slash command inside the TUI; Ctrl-C kills the TUI only and leaves the run alive.
+
+Global flags: `--help`/`-h`, `--version`.
 
 ## Manual E2E Testing Procedure
 
-This is the integration test procedure for the workflow runner using the `workflows/who-is.json` fixture.
+Integration test procedure for the workflow runner using the `workflows/who-is.json` fixture.
 
 ### Test Case 1: Full workflow run from entry step
 
 **Command:**
 ```bash
-bun src/index.ts workflows/who-is.json
+workflow-runner start workflows/who-is.json
 ```
 
 **Expected behavior:**
 
-1. **Initialization:** TUI appears with "Initializing..." status, connects to opencode, shows "Connected (protocol v1)"
+1. **Initialization:** Daemon auto-spawns if not running. TUI appears with "Initializing..." status, connects to opencode, shows "Connected (protocol v1)".
 2. **Step 1 (interactive, architect-advisor):**
    - Step banner appears: "Step 1/3: step-1 [architect-advisor / big-pickle]"
    - Mode shows "interactive"
@@ -53,87 +75,67 @@ bun src/index.ts workflows/who-is.json
 4. **Summary:**
    - End-of-run summary appears with banner
    - Shows "Workflow completed:" with visited steps listed in order
-   - Shows finish message
-   - Shows duration
+   - Shows finish message and duration
    - Status shows "Workflow completed" in green
-   - TUI stays open (user can scroll and review)
-   - Ctrl+C exits
+   - TUI stays attached until the user `/detach`s or Ctrl-C's; the run is then visible as `completed` via `workflow-runner ps`.
 
 **Verification:**
-- Check that `./agent.txt`, `./agent-2.txt` (or `./agent-3.txt`) were created
-- Verify step order is correct based on user's choice
-- Process exits with status code 0
+- Check that `./agent.txt`, `./agent-2.txt` (or `./agent-3.txt`) were created.
+- `workflow-runner ps` shows the run with status `completed` and the visited step list.
 
-### Test Case 2: Start from mid-workflow
+### Test Case 2: Detach and re-attach
 
 **Command:**
 ```bash
-bun src/index.ts workflows/who-is.json --start step-2
+workflow-runner start workflows/who-is.json
+# inside the TUI: type `/detach`
+workflow-runner ps
+workflow-runner attach <run-id-or-slug-prefix>
 ```
 
 **Expected behavior:**
 
-1. TUI connects and initializes
-2. Step 2 (autonomous, devils-advocate) begins immediately
-   - Step banner: "Step 1/3: step-2 [devils-advocate / big-pickle]"
-   - Input field is hidden (autonomous mode)
-   - Agent streams its work and writes `./agent-2.txt`
-   - Agent calls `finish`
-3. Summary shows only step-2 visited
-4. Process exits with status 0
-
-**Verification:**
-- Step-1 is NOT executed
-- Step-2 is the first and only step visited
-- File `./agent-2.txt` is created
+1. After `/detach`, the TUI exits and the run continues in the daemon.
+2. `ps` lists the run as `running` with `ATTACHED` empty.
+3. `attach` re-opens the TUI with the backlog of events; live events resume streaming.
 
 ### Test Case 3: Invalid config path
 
 **Command:**
 ```bash
-bun src/index.ts nonexistent.json
+workflow-runner start nonexistent.json
 ```
 
 **Expected behavior:**
 
-1. Error message appears in console: "Config error: Cannot read workflow file 'nonexistent.json'..."
-2. No TUI is displayed
-3. No `opencode acp` subprocess is spawned
-4. Process exits with status code 1 immediately
+1. Error message in stderr describing the missing/unreadable workflow file.
+2. No TUI is displayed and no run is created.
+3. Process exits non-zero.
 
-**Verification:**
-- No files are created
-- Process exits non-zero
-
-### Test Case 4: Start with non-existent step
+### Test Case 4: Stop a run
 
 **Command:**
 ```bash
-bun src/index.ts workflows/who-is.json --start step-99
+workflow-runner start workflows/who-is.json --detach
+workflow-runner stop <run-id>
+workflow-runner ps
 ```
 
 **Expected behavior:**
 
-1. Error message in console: "Error: Step 'step-99' not found in workflow"
-2. No TUI is displayed
-3. No subprocess is spawned
-4. Process exits with status 1
+1. `stop` returns when the run reaches `aborted` (within the grace window).
+2. `ps` shows the run as `aborted` in the recent-terminal-state section.
 
-**Verification:**
-- Process exits non-zero before any workflow execution
+### Test Case 5: Health check
 
-### Test Case 5: Step with invalid agent
-
-This would require modifying `workflows/who-is.json` to include an invalid agent name that is not in `availableModes`. For example, changing step-1's agent to "nonexistent-agent".
+**Command:**
+```bash
+workflow-runner doctor
+```
 
 **Expected behavior:**
 
-1. Workflow loads successfully
-2. TUI initializes and connects
-3. Step 1 begins
-4. Error: "Step 'step-1': agent 'nonexistent-agent' is not a valid mode..."
-5. Summary shows failure
-6. Process exits with status 1
+Reports per subsystem: socket reachable, lockfile valid, active run count, active agent subprocess count, disk usage. Exits non-zero only if any subsystem reports `FAIL`.
 
 ## Development
 
@@ -152,31 +154,19 @@ bun run typecheck
 ### Building
 
 ```bash
-bun build ./src/index.ts --outdir ./build --target=node
+bun run build
 ```
 
 ## Architecture
 
-- **src/index.ts** - CLI entry point, TUI construction, and RunnerUi implementation
-- **src/workflow.ts** - Workflow config types and loader with validation
-- **src/mcp.ts** - In-process HTTP MCP server for `handoff` and `finish` tools
-- **src/runner.ts** - Step orchestration loop and lifecycle management
-- **src/client.ts** - ACP client handler (unchanged from original)
+The project follows hexagonal architecture:
 
-## Features
-
-- ✅ Parse workflow JSON from command line
-- ✅ Optional `--start <step-id>` flag to begin from mid-workflow
-- ✅ Interactive steps (user converses with agent)
-- ✅ Autonomous steps (agent works independently, streams output)
-- ✅ Step banners for clear step transitions
-- ✅ End-of-run summary with visited steps
-- ✅ Proper exit codes (0 on success, non-zero on failure)
-- ✅ Halt-and-report failure handling
+- **`src/domain/`** — Pure business logic (`Workflow`, `Runner`, `Run`, `Step`, `StepOutcome`, ids).
+- **`src/app/`** — CLI dispatcher and per-subcommand entry points under `src/app/commands/`.
+- **`src/infra/`** — Adapters: `mcp/` (in-process MCP server), `acp/` (opencode subprocess + ACP), `tui/` (terminal UI), `daemon/` (UDS JSON-RPC daemon, run manager, event log, run store), `client/` (UDS JSON-RPC client with auto-spawn).
 
 ## Known Limitations
 
-- Per-step startup latency (spawning fresh subprocess per step is visible)
-- Session pooling not yet implemented
-- No interactive failure recovery (retry/skip)
-- No workflow graph visualization
+- Per-step startup latency (spawning a fresh `opencode acp` subprocess per step is visible).
+- No interactive failure recovery from inside the TUI — use `workflow-runner retry-step` after a failure.
+- Linux/macOS only (UDS + `fcntl` flock).

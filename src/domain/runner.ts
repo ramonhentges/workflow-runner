@@ -59,6 +59,11 @@ export interface RunnerAgentSessionFactory {
 export interface RunnerOptions {
   cwd?: string;
   maxIterations?: number;
+  onStepBoundary?: (
+    visited: StepId[],
+    nextStepId: StepId | null,
+    nextInboundMessage?: string | null,
+  ) => Promise<void>;
 }
 
 export function formatRunSummary(summary: RunSummary): string {
@@ -90,8 +95,14 @@ export class Runner {
   #tools: RunnerTools;
   #cwd: string;
   #maxIterations?: number;
+  #onStepBoundary?: (
+    visited: StepId[],
+    nextStepId: StepId | null,
+    nextInboundMessage?: string | null,
+  ) => Promise<void>;
   #observers: Set<RunnerObserver> = new Set();
   #activeSession: RunnerAgentSession | null = null;
+  #stopRequested = false;
 
   constructor(
     workflow: Workflow,
@@ -104,6 +115,7 @@ export class Runner {
     this.#tools = tools;
     this.#cwd = opts.cwd ?? process.cwd();
     this.#maxIterations = opts.maxIterations;
+    this.#onStepBoundary = opts.onStepBoundary;
   }
 
   addObserver(observer: RunnerObserver): () => void {
@@ -116,7 +128,18 @@ export class Runner {
     await this.#activeSession.sendUserInput(text);
   }
 
-  async run(startStepId?: StepId): Promise<RunSummary> {
+  async stop(): Promise<void> {
+    this.#stopRequested = true;
+    if (this.#activeSession) {
+      await this.#activeSession.dispose().catch(() => {});
+    }
+  }
+
+  get stopRequested(): boolean {
+    return this.#stopRequested;
+  }
+
+  async run(startStepId?: StepId, startInboundMessage?: string | null): Promise<RunSummary> {
     const startTime = Date.now();
     const visited: StepId[] = [];
     let finishMessage = "";
@@ -127,9 +150,10 @@ export class Runner {
       this.#maxIterations ?? Math.max(1, this.workflow.steps.length * 10);
 
     let currentStepId: StepId = entryStepId;
-    let inboundMessage: string | null = null;
+    let inboundMessage: string | null = startInboundMessage ?? null;
     let stepIndex = 1;
     let iterationCount = 0;
+    let boundaryFailed = false;
 
     const sink: RunnerSessionSink = {
       log: (message, color) => this.emit({ type: "log", message, color }),
@@ -138,7 +162,17 @@ export class Runner {
       status: (text, color) => this.emit({ type: "status", text, color }),
     };
 
-    while (true) {
+    try {
+      await this.notifyStepBoundary(visited, currentStepId, inboundMessage);
+    } catch (err) {
+      failure = {
+        failedStep: currentStepId,
+        reason: boundaryErrorReason(err),
+      };
+      boundaryFailed = true;
+    }
+
+    while (!boundaryFailed) {
       iterationCount++;
       if (iterationCount > maxIterations) {
         const recentSteps = visited.slice(-5).join(" → ");
@@ -186,8 +220,20 @@ export class Runner {
           finishMessage = stepOutcome.message;
           break;
         } else if (stepOutcome.kind === "handoff") {
-          currentStepId = stepOutcome.nextStep;
-          inboundMessage = stepOutcome.message;
+          const nextStepId = stepOutcome.nextStep;
+          const handoffMessage = stepOutcome.message;
+          try {
+            await this.notifyStepBoundary(visited, nextStepId, handoffMessage);
+          } catch (err) {
+            failure = {
+              failedStep: step.id,
+              reason: boundaryErrorReason(err),
+            };
+            boundaryFailed = true;
+            break;
+          }
+          currentStepId = nextStepId;
+          inboundMessage = handoffMessage;
         } else if (stepOutcome.kind === "failure") {
           failure = {
             failedStep: stepOutcome.failedStep,
@@ -203,6 +249,17 @@ export class Runner {
         this.#tools.resetStep();
         failure = { failedStep: step.id, reason: String(err) };
         break;
+      }
+    }
+
+    if (!boundaryFailed) {
+      try {
+        await this.notifyStepBoundary(visited, null);
+      } catch (err) {
+        failure = {
+          failedStep: failure?.failedStep ?? visited.at(-1) ?? currentStepId,
+          reason: boundaryErrorReason(err),
+        };
       }
     }
 
@@ -230,4 +287,16 @@ export class Runner {
       }
     }
   }
+
+  private async notifyStepBoundary(
+    visited: StepId[],
+    nextStepId: StepId | null,
+    nextInboundMessage?: string | null,
+  ): Promise<void> {
+    await this.#onStepBoundary?.(visited.slice(), nextStepId, nextInboundMessage);
+  }
+}
+
+function boundaryErrorReason(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }

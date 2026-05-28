@@ -20,6 +20,7 @@ import { McpServer } from "../mcp/mcp-server.js";
 import { RunStore } from "./run-store.js";
 import { EventLog, type EventLogEntry } from "./event-log.js";
 import { RpcErrorCode } from "./protocol.js";
+import type { DaemonLogger } from "./daemon-log.js";
 
 const RUN_LIMIT_DEFAULT = 16;
 const STOP_TIMEOUT_MS = 5000;
@@ -64,6 +65,8 @@ export interface RunManagerOptions {
   generateSlug?: () => RunSlug;
   /** Injected for testing: override MCP server creation. */
   createMcpServer?: () => Promise<McpServer>;
+  /** Optional logger for recording errors and events. */
+  logger?: DaemonLogger | null;
 }
 
 export class RunManager {
@@ -74,6 +77,7 @@ export class RunManager {
   readonly #generateId: () => RunId;
   readonly #generateSlug: () => RunSlug;
   readonly #createMcpServer: () => Promise<McpServer>;
+  readonly #logger: DaemonLogger | null;
 
   constructor(
     storageRoot: string,
@@ -86,6 +90,7 @@ export class RunManager {
     this.#generateId = options.generateId ?? generateRunId;
     this.#generateSlug = options.generateSlug ?? generateSlug;
     this.#createMcpServer = options.createMcpServer ?? McpServer.start.bind(McpServer);
+    this.#logger = options.logger ?? null;
   }
 
   async discoverOnStartup(): Promise<void> {
@@ -315,12 +320,19 @@ export class RunManager {
     }
 
     if (record.runPromise) {
-      await Promise.race([
-        record.runPromise,
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error("stop timeout")), STOP_TIMEOUT_MS),
-        ),
-      ]).catch(() => {});
+      let timer!: ReturnType<typeof setTimeout>;
+      try {
+        await Promise.race([
+          record.runPromise,
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error("stop timeout")), STOP_TIMEOUT_MS);
+          }),
+        ]);
+      } catch {
+        // Either the run promise rejected or the timeout fired; both are acceptable.
+      } finally {
+        clearTimeout(timer);
+      }
     }
 
     if (record.run.snapshot().status === "running") {
@@ -375,6 +387,15 @@ export class RunManager {
   async openEventLog(runId: RunId): Promise<EventLog | null> {
     const record = this.#registry.get(runId);
     if (!record) return null;
+    // Terminal runs have no live runner. Return an uncached, caller-owned handle
+    // so the caller can close it when done and FDs do not accumulate.
+    if (record.run.snapshot().status !== "running") {
+      try {
+        return await EventLog.open(join(this.#store.runsRoot, runId));
+      } catch {
+        return null;
+      }
+    }
     if (record.eventLog) return record.eventLog;
     try {
       const eventLog = await EventLog.open(join(this.#store.runsRoot, runId));
@@ -442,8 +463,28 @@ export class RunManager {
         } catch {}
       }
 
-      await this.#store.persist(record.run.snapshot()).catch(() => {});
+      try {
+        await this.#store.persist(record.run.snapshot());
+      } catch (err) {
+        this.#logger?.log({
+          level: "ERROR",
+          event: "run.terminalPersistFailed",
+          runId: record.run.snapshot().id,
+          msg: err instanceof Error ? err.message : String(err),
+        });
+      }
       this.#emitStatusChanged(record);
+
+      if (record.mcpServer) {
+        await record.mcpServer.close().catch(() => {});
+        record.mcpServer = null;
+      }
+
+      if (record.eventLog) {
+        await record.eventLog.close().catch(() => {});
+        record.eventLog = null;
+      }
+
       return summary;
     } catch (err) {
       if (record.stopRequested) {
@@ -455,8 +496,28 @@ export class RunManager {
           record.run.markCrashed(String(err));
         } catch {}
       }
-      await this.#store.persist(record.run.snapshot()).catch(() => {});
+      try {
+        await this.#store.persist(record.run.snapshot());
+      } catch (persistErr) {
+        this.#logger?.log({
+          level: "ERROR",
+          event: "run.terminalPersistFailed",
+          runId: record.run.snapshot().id,
+          msg: persistErr instanceof Error ? persistErr.message : String(persistErr),
+        });
+      }
       this.#emitStatusChanged(record);
+
+      if (record.mcpServer) {
+        await record.mcpServer.close().catch(() => {});
+        record.mcpServer = null;
+      }
+
+      if (record.eventLog) {
+        await record.eventLog.close().catch(() => {});
+        record.eventLog = null;
+      }
+
       const msg = err instanceof Error ? err.message : String(err);
       return {
         visited: [],

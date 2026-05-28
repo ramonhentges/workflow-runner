@@ -4,6 +4,7 @@ import { asRunId } from "../../domain/run.js";
 import { asStepId } from "../../domain/ids.js";
 import { createMockClient } from "../../infra/client/__tests__/mock-client.js";
 import type { RunnerEvent } from "../../domain/runner.js";
+import type { EventLogEntry } from "../../infra/daemon/protocol.js";
 import { createTuiEventSource } from "./_tui-source.js";
 
 describe("_tui-source", () => {
@@ -97,5 +98,148 @@ describe("_tui-source", () => {
       },
     });
     expect(received).toEqual([]);
+  });
+
+  it("emits a gap-marker log event when droppedEarlyEvents > 0", () => {
+    const mock = createMockClient();
+    const runId = asRunId("abc123");
+
+    const earlyEvents = [
+      {
+        runId,
+        entry: {
+          seq: 1,
+          ts: 0,
+          stepId: asStepId("step-1"),
+          event: { type: "log", message: "early-1" } as RunnerEvent,
+        },
+      },
+    ];
+
+    const source = createTuiEventSource(
+      mock.asClient(),
+      runId,
+      undefined,
+      undefined,
+      earlyEvents,
+      3,
+    );
+
+    const received: RunnerEvent[] = [];
+    source.subscribe((ev) => received.push(ev));
+
+    expect(received).toHaveLength(2);
+    expect(received[0]).toEqual({ type: "log", message: "early-1" });
+    // Second event must be the gap marker
+    expect(received[1]).toMatchObject({
+      type: "log",
+      message: expect.stringContaining("3"),
+    });
+  });
+
+  it("does not emit a gap-marker when droppedEarlyEvents is 0", () => {
+    const mock = createMockClient();
+    const runId = asRunId("abc123");
+
+    const source = createTuiEventSource(
+      mock.asClient(),
+      runId,
+      undefined,
+      undefined,
+      [],
+      0,
+    );
+
+    const received: RunnerEvent[] = [];
+    source.subscribe((ev) => received.push(ev));
+
+    expect(received).toHaveLength(0);
+  });
+
+  it("replays early events captured before attachLoop's TUI subscribe call", () => {
+    const mock = createMockClient();
+    const runId = asRunId("abc123");
+    const otherRunId = asRunId("zzz999");
+
+    // Simulate events captured during the run.attach RPC
+    // (this models the race condition where events arrive in the same TCP
+    // segment as the response, before the TUI's subscription is registered).
+    // Also simulate an event from a different run (in case the early
+    // subscription caught it, e.g., if a prefix matched multiple runs).
+    const earlyEvents = [
+      {
+        runId,
+        entry: {
+          seq: 1,
+          ts: 0,
+          stepId: asStepId("step-1"),
+          event: { type: "log", message: "early-1" } as RunnerEvent,
+        },
+      },
+      {
+        runId,
+        entry: {
+          seq: 2,
+          ts: 0,
+          stepId: asStepId("step-1"),
+          event: { type: "log", message: "early-2" } as RunnerEvent,
+        },
+      },
+      {
+        // This event is for a different run and should be filtered out.
+        runId: otherRunId,
+        entry: {
+          seq: 3,
+          ts: 0,
+          stepId: null,
+          event: { type: "log", message: "wrong-run" } as RunnerEvent,
+        },
+      },
+    ];
+
+    // Simulate the early subscription being active but now complete.
+    let earlySubWasCalled = false;
+    const earlyUnsubscribe = (): void => {
+      earlySubWasCalled = true;
+    };
+
+    const source = createTuiEventSource(
+      mock.asClient(),
+      runId,
+      undefined,
+      earlyUnsubscribe,
+      earlyEvents,
+    );
+
+    const received: RunnerEvent[] = [];
+    source.subscribe((ev) => received.push(ev));
+
+    // Verify only matching early events were replayed (wrong-run filtered out).
+    expect(received).toEqual([
+      { type: "log", message: "early-1" },
+      { type: "log", message: "early-2" },
+    ]);
+
+    // Verify the early subscription was unsubscribed.
+    expect(earlySubWasCalled).toBe(true);
+
+    // Verify we can still receive live events.
+    mock.emit({
+      method: "event.run.event",
+      params: {
+        runId,
+        entry: {
+          seq: 100,
+          ts: 0,
+          stepId: null,
+          event: { type: "log", message: "live-event" },
+        },
+      },
+    });
+    expect(received).toEqual([
+      { type: "log", message: "early-1" },
+      { type: "log", message: "early-2" },
+      { type: "log", message: "live-event" },
+    ]);
   });
 });

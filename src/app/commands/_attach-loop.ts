@@ -1,8 +1,14 @@
 import type { RunId } from "../../domain/run.js";
 import type { DaemonClient } from "../../infra/client/client.js";
+import type { EventLogEntry, RpcNotification } from "../../infra/daemon/protocol.js";
 import { Tui } from "../../infra/tui/tui.js";
 import { createTuiEventSource } from "./_tui-source.js";
 import { watchExitCode } from "./_status-watcher.js";
+
+// Cap early-event buffer to avoid unbounded growth in high-throughput scenarios.
+// Size is intentionally generous: the buffer must hold every event that arrives
+// between subscribe() and tui.attachSource(), which is at most one RPC round-trip.
+const EARLY_EVENT_BUFFER_LIMIT = 5000;
 
 /**
  * Default attach loop used by `start` and `attach` (task 16): calls
@@ -18,7 +24,41 @@ export async function attachLoop(
   client: DaemonClient,
   runId: RunId,
 ): Promise<number> {
-  const { runId: resolvedRunId, backlog } = await client.call("run.attach", { runId });
+  // Subscribe before calling run.attach to capture any events that are
+  // enqueued while the attach handler is running. If the daemon returns
+  // events and the response in the same TCP segment, they're dispatched
+  // synchronously, and our subscription must already be registered.
+  const earlyEvents: Array<{ runId: RunId; entry: EventLogEntry }> = [];
+  let droppedEarlyEvents = 0;
+  const earlyUnsubscribe = client.subscribe(
+    (n) =>
+      n.method === "event.run.event" &&
+      (n.params as { runId: RunId }).runId === runId,
+    (n: RpcNotification) => {
+      if (n.method === "event.run.event") {
+        if (earlyEvents.length >= EARLY_EVENT_BUFFER_LIMIT) {
+          // Drop newest: the oldest buffered events bridge the gap between the
+          // daemon's backlog snapshot and the live subscription, so they must
+          // be preserved. Events dropped here are genuinely lost (the live
+          // subscription only delivers future events); the count is forwarded
+          // to createTuiEventSource so the TUI can surface a gap marker.
+          droppedEarlyEvents++;
+          return;
+        }
+        earlyEvents.push(n.params);
+      }
+    },
+  );
+
+  let result;
+  try {
+    result = await client.call("run.attach", { runId });
+  } catch (err) {
+    earlyUnsubscribe();
+    throw err;
+  }
+
+  const { runId: resolvedRunId, backlog } = result;
 
   let resolveQuit!: () => void;
   const quitPromise = new Promise<void>((resolve) => {
@@ -27,19 +67,32 @@ export async function attachLoop(
 
   const watcher = watchExitCode(client, resolvedRunId);
 
-  const tui = await Tui.create({
-    hooks: {
-      exit: () => resolveQuit(),
-    },
-  });
-  const source = createTuiEventSource(client, resolvedRunId, backlog);
-  tui.attachSource(source);
-
+  let handedOff = false;
   try {
-    await quitPromise;
+    const tui = await Tui.create({
+      hooks: {
+        exit: () => resolveQuit(),
+      },
+    });
+    const source = createTuiEventSource(
+      client,
+      resolvedRunId,
+      backlog,
+      earlyUnsubscribe,
+      earlyEvents,
+      droppedEarlyEvents,
+    );
+    handedOff = true;
+    tui.attachSource(source);
+
+    try {
+      await quitPromise;
+    } finally {
+      watcher.dispose();
+      tui.shutdown();
+    }
   } finally {
-    watcher.dispose();
-    tui.shutdown();
+    if (!handedOff) earlyUnsubscribe();
   }
   return watcher.current();
 }

@@ -506,4 +506,164 @@ describe("Runner.run orchestration", () => {
     expect(inputState.received).toBe("hello");
     expect(summary.finishMessage).toBe("got input");
   });
+
+  it("calls onStepBoundary with snapshots before entry, between steps, and after finish", async () => {
+    const step1 = stepShape("step-1", {
+      edges: [{ next_step: sid("step-2"), intent: "go to step 2" }],
+    });
+    const step2 = stepShape("step-2");
+    const workflow = makeWorkflow([step1, step2]);
+    const calls: { visited: StepId[]; nextStepId: StepId | null }[] = [];
+    const factory = makeFakeSessionFactory({
+      resolveOutcome: (step): StepOutcome =>
+        step.id === sid("step-1")
+          ? { kind: "handoff", nextStep: sid("step-2"), message: "next" }
+          : { kind: "finish", message: "done" },
+    });
+
+    const runner = new Runner(workflow, factory, makeTools(), {
+      cwd: "/tmp",
+      onStepBoundary: async (visited, nextStepId) => {
+        calls.push({ visited: [...visited], nextStepId });
+        visited.push(sid("mutated-by-callback"));
+      },
+    });
+
+    const summary = await runner.run(sid("step-1"));
+
+    expect(calls).toEqual([
+      { visited: [], nextStepId: sid("step-1") },
+      { visited: [sid("step-1")], nextStepId: sid("step-2") },
+      { visited: [sid("step-1"), sid("step-2")], nextStepId: null },
+    ]);
+    expect(summary.visited).toEqual([sid("step-1"), sid("step-2")]);
+  });
+
+  it("awaits onStepBoundary resolution before emitting the next banner", async () => {
+    const step1 = stepShape("step-1", {
+      edges: [{ next_step: sid("step-2"), intent: "go to step 2" }],
+    });
+    const step2 = stepShape("step-2");
+    const workflow = makeWorkflow([step1, step2]);
+    const order: string[] = [];
+    let secondBoundaryStarted!: () => void;
+    let releaseSecondBoundary!: () => void;
+    const secondBoundaryStartedPromise = new Promise<void>((resolve) => {
+      secondBoundaryStarted = resolve;
+    });
+    const releaseSecondBoundaryPromise = new Promise<void>((resolve) => {
+      releaseSecondBoundary = resolve;
+    });
+    const factory = makeFakeSessionFactory({
+      resolveOutcome: (step): StepOutcome =>
+        step.id === sid("step-1")
+          ? { kind: "handoff", nextStep: sid("step-2"), message: "next" }
+          : { kind: "finish", message: "done" },
+    });
+
+    const runner = new Runner(workflow, factory, makeTools(), {
+      cwd: "/tmp",
+      onStepBoundary: async (_visited, nextStepId) => {
+        const label = nextStepId ?? "terminal";
+        order.push(`boundary:${label}:start`);
+        if (nextStepId === sid("step-2")) {
+          secondBoundaryStarted();
+          await releaseSecondBoundaryPromise;
+        }
+        order.push(`boundary:${label}:resolved`);
+      },
+    });
+    runner.addObserver({
+      onEvent: (event) => {
+        if (event.type === "banner") order.push(`banner:${event.step.id}`);
+        if (event.type === "summary") order.push("summary");
+      },
+    });
+
+    const runPromise = runner.run(sid("step-1"));
+    await secondBoundaryStartedPromise;
+
+    expect(order).not.toContain("banner:step-2");
+    releaseSecondBoundary();
+    const summary = await runPromise;
+
+    expect(summary.failure).toBeUndefined();
+    expect(order.indexOf("boundary:step-2:resolved")).toBeLessThan(
+      order.indexOf("banner:step-2"),
+    );
+    expect(order.indexOf("boundary:terminal:resolved")).toBeLessThan(
+      order.indexOf("summary"),
+    );
+  });
+
+  it("records a failure if onStepBoundary throws before the first banner", async () => {
+    const workflow = makeWorkflow([stepShape("step-1")]);
+    const factory = makeFakeSessionFactory({
+      resolveOutcome: () => ({ kind: "finish", message: "done" }),
+    });
+    const events: string[] = [];
+    const runner = new Runner(workflow, factory, makeTools(), {
+      cwd: "/tmp",
+      onStepBoundary: () => {
+        throw new Error("initial persist failed");
+      },
+    });
+    runner.addObserver({
+      onEvent: (event) => {
+        events.push(event.type);
+      },
+    });
+
+    const summary = await runner.run(sid("step-1"));
+
+    expect(summary.failure?.failedStep).toBe(sid("step-1"));
+    expect(summary.failure?.reason).toContain("initial persist failed");
+    expect(summary.visited).toEqual([]);
+    expect(events).not.toContain("banner");
+  });
+
+  it("records a failure if onStepBoundary rejects between steps", async () => {
+    const step1 = stepShape("step-1", {
+      edges: [{ next_step: sid("step-2"), intent: "go to step 2" }],
+    });
+    const step2 = stepShape("step-2");
+    const workflow = makeWorkflow([step1, step2]);
+    const factory = makeFakeSessionFactory({
+      resolveOutcome: (step): StepOutcome =>
+        step.id === sid("step-1")
+          ? { kind: "handoff", nextStep: sid("step-2"), message: "next" }
+          : { kind: "finish", message: "done" },
+    });
+    const runner = new Runner(workflow, factory, makeTools(), {
+      cwd: "/tmp",
+      onStepBoundary: async (_visited, nextStepId) => {
+        if (nextStepId === sid("step-2")) {
+          throw new Error("handoff persist failed");
+        }
+      },
+    });
+
+    const summary = await runner.run(sid("step-1"));
+
+    expect(summary.failure?.failedStep).toBe(sid("step-1"));
+    expect(summary.failure?.reason).toContain("handoff persist failed");
+    expect(summary.visited).toEqual([sid("step-1")]);
+  });
+
+  it("records a failure if onStepBoundary rejects before the first banner", async () => {
+    const workflow = makeWorkflow([stepShape("step-1")]);
+    const factory = makeFakeSessionFactory({
+      resolveOutcome: () => ({ kind: "finish", message: "done" }),
+    });
+    const runner = new Runner(workflow, factory, makeTools(), {
+      cwd: "/tmp",
+      onStepBoundary: () => Promise.reject(new Error("async persist failed")),
+    });
+
+    const summary = await runner.run(sid("step-1"));
+
+    expect(summary.failure?.failedStep).toBe(sid("step-1"));
+    expect(summary.failure?.reason).toContain("async persist failed");
+    expect(summary.visited).toEqual([]);
+  });
 });

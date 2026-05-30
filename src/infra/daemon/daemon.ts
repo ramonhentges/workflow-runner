@@ -338,7 +338,7 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<void> {
   let listener: UnixSocketListener<ConnState | undefined> | null = null;
 
   const sessionFactory = await resolveSessionFactory();
-  const runManager = new RunManager(storageRoot, sessionFactory);
+  const runManager = new RunManager(storageRoot, sessionFactory, { logger });
 
   let triggerExit: (reason: string) => void = () => {};
 

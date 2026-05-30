@@ -38,7 +38,7 @@ void ({ runs: [] } satisfies RpcMethods["run.ps"]["result"]);
 // RpcMethods["run.attach"]
 void ({ runId: _runId } satisfies RpcMethods["run.attach"]["params"]);
 void ({ runId: _runId, fromSeq: 1 } satisfies RpcMethods["run.attach"]["params"]);
-void ({ runId: _runId, initialSnapshot: _snapshot, backlog: [] } satisfies RpcMethods["run.attach"]["result"]);
+void ({ runId: _runId, initialSnapshot: _snapshot, backlog: [], backlogTruncated: false } satisfies RpcMethods["run.attach"]["result"]);
 
 // RpcMethods["run.send"]
 void ({ runId: _runId, message: "hello" } satisfies RpcMethods["run.send"]["params"]);

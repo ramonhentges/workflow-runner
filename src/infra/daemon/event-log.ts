@@ -13,6 +13,7 @@ import type { RunnerEvent } from "../../domain/runner.js";
 
 export const EVENT_LOG_RING_LIMIT = 1000;
 export const EVENT_LOG_ROTATE_BYTES = 50 * 1024 * 1024;
+export const EVENT_LOG_BACKLOG_LIMIT = 10000;
 
 const ACTIVE_LOG = "events.jsonl";
 const ROTATED_LOG_PATTERN = /^events\.(\d+)\.jsonl$/;
@@ -22,6 +23,11 @@ export interface EventLogEntry {
   ts: number;
   stepId: StepId | null;
   event: RunnerEvent;
+}
+
+export interface ReadEventsSinceResult {
+  entries: EventLogEntry[];
+  truncated: boolean;
 }
 
 export class EventLogError extends Error {
@@ -166,6 +172,62 @@ export class EventLog {
     }
 
     return [];
+  }
+
+  async readEventsSince(fromSeq: number): Promise<ReadEventsSinceResult> {
+    this.#assertOpen();
+
+    // Fast path: if fromSeq is within the ring, return just the ring entries.
+    // Ring has at most 1000 entries, so this avoids disk I/O for common reconnect case.
+    // Only use fast path if ring's oldest entry is at or before fromSeq (ring covers the range).
+    if (this.#ring.length > 0 && this.#ring[0]!.seq <= fromSeq + 1) {
+      return { entries: this.#ring.filter(e => e.seq > fromSeq), truncated: false };
+    }
+
+    const files = await logFilesOldestFirst(this.runDir);
+    const result: EventLogEntry[] = [];
+    let canAppendAllRemaining = false;
+
+    for (const file of files) {
+      const entries = await readEntries(file.path);
+
+      if (entries.length === 0) {
+        continue;
+      }
+
+      // Skip files where all entries are older than fromSeq.
+      if (entries[entries.length - 1]!.seq <= fromSeq) {
+        continue;
+      }
+
+      // Once this file's first entry > fromSeq, all subsequent files also > fromSeq
+      // (since seq is monotonic across files and files are ordered).
+      if (entries[0]!.seq > fromSeq) {
+        canAppendAllRemaining = true;
+      }
+
+      if (canAppendAllRemaining) {
+        result.push(...entries);
+      } else {
+        // This file spans the boundary; filter entry-by-entry.
+        for (const entry of entries) {
+          if (entry.seq > fromSeq) {
+            result.push(entry);
+          }
+        }
+      }
+
+      // Hard cap: prevent OOM on extreme disconnects. Signal truncation to caller.
+      if (result.length >= EVENT_LOG_BACKLOG_LIMIT) {
+        return { entries: result, truncated: true };
+      }
+    }
+
+    return { entries: result, truncated: false };
+  }
+
+  async flush(): Promise<void> {
+    await this.#writeChain;
   }
 
   async close(): Promise<void> {
@@ -320,12 +382,12 @@ async function logFilesOldestFirst(runDir: string): Promise<LogFile[]> {
 }
 
 async function nextRotatedPath(runDir: string): Promise<string> {
-  for (let index = 1; ; index++) {
-    const path = join(runDir, `events.${index}.jsonl`);
-    if (!existsSync(path)) {
-      return path;
-    }
-  }
+  const files = await logFilesOldestFirst(runDir);
+  const maxRotation = files
+    .map(f => f.rotation)
+    .filter(r => Number.isFinite(r))
+    .reduce((a, b) => Math.max(a, b), 0);
+  return join(runDir, `events.${maxRotation + 1}.jsonl`);
 }
 
 function findLastBannerIndex(entries: EventLogEntry[], stepId: StepId): number {

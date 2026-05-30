@@ -39,7 +39,7 @@ export interface RpcMethods {
   };
   "run.attach": {
     params: { runId: RunId; fromSeq?: number };
-    result: { runId: RunId; initialSnapshot: RunSnapshot; backlog: EventLogEntry[] };
+    result: { runId: RunId; initialSnapshot: RunSnapshot; backlog: EventLogEntry[]; backlogTruncated: boolean };
   };
   "run.send": {
     params: { runId: RunId; message: string };

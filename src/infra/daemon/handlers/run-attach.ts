@@ -9,14 +9,34 @@ export function createRunAttachHandler(rm: RunManager): RpcHandler<"run.attach">
     const snapshot = active.run.snapshot();
     const currentStepId = snapshot.currentStepId;
 
+    // For terminal runs active.eventLog is null (runner closed it on completion).
+    // Open a dedicated handle we own and must close when the connection drops.
+    // Running runs have active.eventLog set by the runner; do not close that handle.
+    const ownedEventLog = !active.eventLog
+      ? await rm.openEventLog(runId).catch(() => null)
+      : null;
+    const eventLog = active.eventLog ?? ownedEventLog;
+
     // Collect historical backlog BEFORE registering the subscriber so that
     // it is returned inline in the RPC result and the client never races to
     // subscribe before replay notifications arrive on the wire.
     const backlog: EventLogEntry[] = [];
-    if (currentStepId !== null) {
-      const eventLog =
-        active.eventLog ??
-        (await rm.openEventLog(runId).catch(() => null));
+    let maxBacklogSeq = params.fromSeq ?? 0;
+    let backlogTruncated = false;
+    if (params.fromSeq !== undefined) {
+      // Client is resuming after a disconnect; return all events since fromSeq
+      if (eventLog) {
+        const { entries: events, truncated } = await eventLog
+          .readEventsSince(params.fromSeq)
+          .catch(() => ({ entries: [] as EventLogEntry[], truncated: false }));
+        backlog.push(...events);
+        if (events.length > 0) {
+          maxBacklogSeq = events[events.length - 1]!.seq;
+        }
+        backlogTruncated = truncated;
+      }
+    } else if (currentStepId !== null) {
+      // No fromSeq provided; return current step backlog for initial attach
       if (eventLog) {
         const fromRing = eventLog.currentStepBacklog(currentStepId);
         if (fromRing !== null) {
@@ -27,6 +47,9 @@ export function createRunAttachHandler(rm: RunManager): RpcHandler<"run.attach">
               .readBackwardForCurrentStep(currentStepId)
               .catch(() => [])),
           );
+        }
+        if (backlog.length > 0) {
+          maxBacklogSeq = backlog[backlog.length - 1]!.seq;
         }
       }
     }
@@ -50,6 +73,32 @@ export function createRunAttachHandler(rm: RunManager): RpcHandler<"run.attach">
       throw e;
     }
 
+    // Close the race window: between backlog read and subscriber registration,
+    // events may have been appended but not delivered to the new subscriber
+    // (observer snapshots subscribers before awaiting the append). Re-read
+    // events newer than the backlog to catch any that slipped through.
+    // Only do this if we have a valid anchor: either an explicit fromSeq or
+    // actual backlog events. If backlog is empty, don't read from seq 0 as
+    // that would fetch all historical events.
+    const haveAnchor = params.fromSeq !== undefined || backlog.length > 0;
+    if (haveAnchor && eventLog) {
+      // Drain pending writes before gap-read: any append queued on #writeChain
+      // before subscriber registration must be on disk before readEventsSince runs.
+      await eventLog.flush().catch(() => {});
+      const { entries: gapEvents } = await eventLog
+        .readEventsSince(maxBacklogSeq)
+        .catch(() => ({ entries: [] as EventLogEntry[], truncated: false }));
+      // Deduplicate: skip any events already in backlog (shouldn't happen,
+      // but be defensive).
+      const seen = new Set(backlog.map((e) => e.seq));
+      for (const entry of gapEvents) {
+        if (!seen.has(entry.seq)) {
+          backlog.push(entry);
+          seen.add(entry.seq);
+        }
+      }
+    }
+
     let cleanedUp = false;
     ctx.onClose(() => {
       if (cleanedUp) return;
@@ -57,8 +106,11 @@ export function createRunAttachHandler(rm: RunManager): RpcHandler<"run.attach">
       try {
         detach();
       } catch {}
+      if (ownedEventLog) {
+        ownedEventLog.close().catch(() => {});
+      }
     });
 
-    return { runId, initialSnapshot: snapshot, backlog };
+    return { runId, initialSnapshot: snapshot, backlog, backlogTruncated };
   };
 }

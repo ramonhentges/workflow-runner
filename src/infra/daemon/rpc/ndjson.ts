@@ -1,5 +1,3 @@
-const decoder = new TextDecoder();
-
 /**
  * Splits a ReadableStream<Uint8Array> into lines on '\n'.
  * Handles partial lines across chunk boundaries.
@@ -8,6 +6,7 @@ const decoder = new TextDecoder();
 export async function* ndjsonLines(
   readable: ReadableStream<Uint8Array>,
 ): AsyncGenerator<string> {
+  const decoder = new TextDecoder();
   const reader = readable.getReader();
   let buffer = "";
   try {

@@ -6,7 +6,7 @@ import { RunManager, RunManagerError } from "./run-manager.js";
 import type { RunSubscriber } from "./run-manager.js";
 import { RunStore } from "./run-store.js";
 import { Run, asRunId, asRunSlug } from "../../domain/run.js";
-import type { RunId, RunSlug } from "../../domain/run.js";
+import type { RunId, RunSlug, RunSnapshot } from "../../domain/run.js";
 import type { StepOutcome } from "../../domain/outcome.js";
 import type { StepId } from "../../domain/ids.js";
 import { asStepId, asStepToken } from "../../domain/ids.js";
@@ -18,6 +18,7 @@ import {
 } from "./test-helpers/fake-session-factory.js";
 import type { RunnerAgentSessionFactory } from "../../domain/runner.js";
 import type { McpServer } from "../mcp/mcp-server.js";
+import type { DaemonLogRecord } from "./daemon-log.js";
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -762,6 +763,34 @@ describe("RunManager", () => {
     await manager.shutdown();
   });
 
+  it("stop clears its setTimeout to avoid keeping event loop alive", async () => {
+    const wfPath = await writeWorkflow(tmpDir, "wf.json", SINGLE_STEP_WORKFLOW);
+    const factory = new FakeSessionFactory({
+      resolveOutcome: () => ({ kind: "finish", message: "done" }),
+    });
+    const manager = new RunManager(tmpDir, factory);
+
+    const { runId } = await manager.startRun(wfPath);
+    const record = manager.get(runId);
+    if (!record) throw new Error("record not found");
+
+    // Wait for run to complete, then call stop (race is already resolved)
+    await record.runPromise;
+    await manager.stop(runId);
+
+    // The setTimeout created in stop should have been cleared.
+    // Verify by checking that the event loop can exit cleanly:
+    // If timers were leaked, we would need to wait for them to fire.
+    // We'll verify indirectly by shutting down quickly.
+    const shutdownStart = Date.now();
+    await manager.shutdown();
+    const shutdownDuration = Date.now() - shutdownStart;
+
+    // Shutdown should complete quickly (well under 5 seconds)
+    // If the timer leak existed, shutdown might wait for the 5s timeout
+    expect(shutdownDuration).toBeLessThan(1000);
+  });
+
   // ── shutdown ─────────────────────────────────────────────────────────────
 
   it("shutdown closes all MCP servers without disposing active runners", async () => {
@@ -806,6 +835,319 @@ describe("RunManager", () => {
       0,
     );
     expect(disposeCountAfter).toBe(0);
+  });
+
+  // ── MCP server lifecycle ──────────────────────────────────────────────────
+
+  it("completes run closes its MCP server", async () => {
+    const wfPath = await writeWorkflow(tmpDir, "wf.json", SINGLE_STEP_WORKFLOW);
+    const factory = new FakeSessionFactory({
+      resolveOutcome: () => ({ kind: "finish", message: "done" }),
+    });
+
+    let mcpServers: Array<{ instance: McpServer; closeCalled: boolean }> = [];
+    const mockCreateMcpServer = async (): Promise<McpServer> => {
+      const { McpServer: MS } = await import("../mcp/mcp-server.js");
+      const server = await MS.start();
+      let closeCalled = false;
+      const originalClose = server.close.bind(server);
+      (server as unknown as { close: () => Promise<void> }).close = async () => {
+        closeCalled = true;
+        return originalClose();
+      };
+      mcpServers.push({ instance: server, get closeCalled() { return closeCalled; } });
+      return server;
+    };
+
+    const manager = new RunManager(tmpDir, factory, {
+      createMcpServer: mockCreateMcpServer,
+    });
+
+    const { runId } = await manager.startRun(wfPath);
+    const record = manager.get(runId);
+    if (!record) throw new Error("record not found");
+
+    // Wait for run to complete
+    await record.runPromise;
+
+    // The MCP server should have been closed
+    expect(mcpServers.length).toBe(1);
+    expect(mcpServers[0]!.closeCalled).toBe(true);
+    expect(record.mcpServer).toBeNull();
+
+    await manager.shutdown();
+  });
+
+  it("failed run closes its MCP server", async () => {
+    const wfPath = await writeWorkflow(tmpDir, "wf.json", SINGLE_STEP_WORKFLOW);
+    const factory = new FakeSessionFactory({
+      rejectWith: () => new Error("agent exploded"),
+    });
+
+    let mcpServers: Array<{ instance: McpServer; closeCalled: boolean }> = [];
+    const mockCreateMcpServer = async (): Promise<McpServer> => {
+      const { McpServer: MS } = await import("../mcp/mcp-server.js");
+      const server = await MS.start();
+      let closeCalled = false;
+      const originalClose = server.close.bind(server);
+      (server as unknown as { close: () => Promise<void> }).close = async () => {
+        closeCalled = true;
+        return originalClose();
+      };
+      mcpServers.push({ instance: server, get closeCalled() { return closeCalled; } });
+      return server;
+    };
+
+    const manager = new RunManager(tmpDir, factory, {
+      createMcpServer: mockCreateMcpServer,
+    });
+
+    const { runId } = await manager.startRun(wfPath);
+    const record = manager.get(runId);
+    if (!record) throw new Error("record not found");
+
+    // Wait for run to fail
+    await record.runPromise;
+
+    // The MCP server should have been closed
+    expect(mcpServers.length).toBe(1);
+    expect(mcpServers[0]!.closeCalled).toBe(true);
+    expect(record.mcpServer).toBeNull();
+
+    await manager.shutdown();
+  });
+
+  it("multiple completed runs have at most one open MCP server at any time", async () => {
+    const wfPath = await writeWorkflow(tmpDir, "wf.json", SINGLE_STEP_WORKFLOW);
+    const factory = new FakeSessionFactory({
+      resolveOutcome: () => ({ kind: "finish", message: "done" }),
+    });
+
+    const serverStates: Array<{ opened: boolean; closed: boolean }> = [];
+    const mockCreateMcpServer = async (): Promise<McpServer> => {
+      const { McpServer: MS } = await import("../mcp/mcp-server.js");
+      const server = await MS.start();
+      const state = { opened: true, closed: false };
+      serverStates.push(state);
+
+      const originalClose = server.close.bind(server);
+      (server as unknown as { close: () => Promise<void> }).close = async () => {
+        state.closed = true;
+        return originalClose();
+      };
+      return server;
+    };
+
+    const manager = new RunManager(tmpDir, factory, {
+      createMcpServer: mockCreateMcpServer,
+    });
+
+    // Start 5 runs sequentially, waiting for each to complete
+    for (let i = 0; i < 5; i++) {
+      const { runId } = await manager.startRun(wfPath);
+      const record = manager.get(runId);
+      if (!record) throw new Error("record not found");
+      await record.runPromise;
+
+      // Count open servers (opened && !closed)
+      const openCount = serverStates.filter((s) => s.opened && !s.closed).length;
+      expect(openCount).toBeLessThanOrEqual(1);
+    }
+
+    // All servers should be closed at the end
+    for (const state of serverStates) {
+      expect(state.closed).toBe(true);
+    }
+
+    await manager.shutdown();
+  });
+
+  // ── EventLog lifecycle ────────────────────────────────────────────────────
+
+  it("completes run closes its EventLog and nulls the cached handle", async () => {
+    const wfPath = await writeWorkflow(tmpDir, "wf.json", SINGLE_STEP_WORKFLOW);
+    const factory = new FakeSessionFactory({
+      resolveOutcome: () => ({ kind: "finish", message: "done" }),
+    });
+
+    const manager = new RunManager(tmpDir, factory);
+
+    const { runId } = await manager.startRun(wfPath);
+    const record = manager.get(runId);
+    if (!record) throw new Error("record not found");
+
+    await record.runPromise;
+
+    expect(record.eventLog).toBeNull();
+
+    // openEventLog should lazily reopen (file still on disk)
+    const reopened = await manager.openEventLog(runId);
+    expect(reopened).not.toBeNull();
+
+    await manager.shutdown();
+  });
+
+  it("failed run closes its EventLog and nulls the cached handle", async () => {
+    const wfPath = await writeWorkflow(tmpDir, "wf.json", SINGLE_STEP_WORKFLOW);
+    const factory = new FakeSessionFactory({
+      rejectWith: () => new Error("agent exploded"),
+    });
+
+    const manager = new RunManager(tmpDir, factory);
+
+    const { runId } = await manager.startRun(wfPath);
+    const record = manager.get(runId);
+    if (!record) throw new Error("record not found");
+
+    await record.runPromise;
+
+    expect(record.eventLog).toBeNull();
+
+    // openEventLog should lazily reopen (file still on disk)
+    const reopened = await manager.openEventLog(runId);
+    expect(reopened).not.toBeNull();
+    await reopened!.close();
+
+    await manager.shutdown();
+  });
+
+  it("openEventLog for terminal run returns uncached handle that does not pollute record.eventLog", async () => {
+    const wfPath = await writeWorkflow(tmpDir, "wf.json", SINGLE_STEP_WORKFLOW);
+    const factory = new FakeSessionFactory({
+      resolveOutcome: () => ({ kind: "finish", message: "done" }),
+    });
+    const manager = new RunManager(tmpDir, factory);
+
+    const { runId } = await manager.startRun(wfPath);
+    const record = manager.get(runId);
+    if (!record) throw new Error("record not found");
+    await record.runPromise;
+
+    // Run is now terminal; record.eventLog was closed and nulled by #launchRunner.
+    expect(record.eventLog).toBeNull();
+
+    const handle1 = await manager.openEventLog(runId);
+    expect(handle1).not.toBeNull();
+    // Terminal handle must NOT be cached — FDs must not accumulate across attaches.
+    expect(record.eventLog).toBeNull();
+
+    const handle2 = await manager.openEventLog(runId);
+    expect(handle2).not.toBeNull();
+    // Each call returns an independent handle; caller owns each one.
+    expect(handle1).not.toBe(handle2);
+
+    await handle1!.close();
+    await handle2!.close();
+
+    await manager.shutdown();
+  });
+
+  // ── persist failure logging ───────────────────────────────────────────────
+
+  it("logs run.terminalPersistFailed when persist fails at run completion", async () => {
+    const wfPath = await writeWorkflow(tmpDir, "wf.json", SINGLE_STEP_WORKFLOW);
+    const factory = new FakeSessionFactory({
+      resolveOutcome: () => ({ kind: "finish", message: "done" }),
+    });
+
+    const loggedRecords: DaemonLogRecord[] = [];
+    const mockLogger = {
+      log(record: DaemonLogRecord) {
+        loggedRecords.push(record);
+      },
+      close: async () => {},
+    };
+
+    // Mock RunStore.persist to throw
+    const origPersist = RunStore.prototype.persist;
+    let persistCallCount = 0;
+    (RunStore.prototype as unknown as { persist: (s: RunSnapshot) => Promise<void> }).persist =
+      async function () {
+        persistCallCount++;
+        // First call (from startRun) succeeds, second call (from completion) fails
+        if (persistCallCount > 1) {
+          throw new Error("disk full");
+        }
+        return origPersist.call(this, arguments[0]);
+      };
+
+    try {
+      const manager = new RunManager(tmpDir, factory, {
+        logger: mockLogger as unknown as undefined,
+      });
+
+      const { runId } = await manager.startRun(wfPath);
+      const record = manager.get(runId);
+      if (!record) throw new Error("record not found");
+
+      await record.runPromise;
+
+      // Should have logged the persist failure
+      const persistFailedLog = loggedRecords.find(
+        (r) => r.event === "run.terminalPersistFailed",
+      );
+      expect(persistFailedLog).toBeDefined();
+      expect(persistFailedLog!.level).toBe("ERROR");
+      expect(persistFailedLog!.msg).toContain("disk full");
+      expect(persistFailedLog!.runId).toBe(runId);
+
+      await manager.shutdown();
+    } finally {
+      (RunStore.prototype as unknown as { persist: unknown }).persist = origPersist;
+    }
+  });
+
+  it("logs run.terminalPersistFailed when persist fails at run crash", async () => {
+    const wfPath = await writeWorkflow(tmpDir, "wf.json", SINGLE_STEP_WORKFLOW);
+    const factory = new FakeSessionFactory({
+      rejectWith: () => new Error("agent error"),
+    });
+
+    const loggedRecords: DaemonLogRecord[] = [];
+    const mockLogger = {
+      log(record: DaemonLogRecord) {
+        loggedRecords.push(record);
+      },
+      close: async () => {},
+    };
+
+    // Mock RunStore.persist to throw on crash path
+    const origPersist = RunStore.prototype.persist;
+    let persistCallCount = 0;
+    (RunStore.prototype as unknown as { persist: (s: RunSnapshot) => Promise<void> }).persist =
+      async function () {
+        persistCallCount++;
+        // First call (from startRun) succeeds, second call (from crash) fails
+        if (persistCallCount > 1) {
+          throw new Error("permission denied");
+        }
+        return origPersist.call(this, arguments[0]);
+      };
+
+    try {
+      const manager = new RunManager(tmpDir, factory, {
+        logger: mockLogger as unknown as undefined,
+      });
+
+      const { runId } = await manager.startRun(wfPath);
+      const record = manager.get(runId);
+      if (!record) throw new Error("record not found");
+
+      await record.runPromise;
+
+      // Should have logged the persist failure
+      const persistFailedLog = loggedRecords.find(
+        (r) => r.event === "run.terminalPersistFailed",
+      );
+      expect(persistFailedLog).toBeDefined();
+      expect(persistFailedLog!.level).toBe("ERROR");
+      expect(persistFailedLog!.msg).toContain("permission denied");
+      expect(persistFailedLog!.runId).toBe(runId);
+
+      await manager.shutdown();
+    } finally {
+      (RunStore.prototype as unknown as { persist: unknown }).persist = origPersist;
+    }
   });
 
   // ── 100-run stress test ───────────────────────────────────────────────────

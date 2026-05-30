@@ -18,7 +18,7 @@ import { createRunSendHandler } from "./run-send.js";
 import { createDaemonDoctorHandler } from "./daemon-doctor.js";
 import { createDaemonShutdownHandler } from "./daemon-shutdown.js";
 import { createMockRpcContext } from "../rpc/__tests__/mock-context.js";
-import type { EventLog } from "../event-log.js";
+import type { EventLog, ReadEventsSinceResult } from "../event-log.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -236,6 +236,30 @@ describe("createRunRetryStepHandler", () => {
     expect(err).toBeInstanceOf(RpcError);
     expect((err as RpcError).code).toBe(RpcErrorCode.RUN_NOT_RETRY_ELIGIBLE);
   });
+
+  it("maps WorkflowConfigError to WORKFLOW_INVALID", async () => {
+    const snap = makeSnapshot({
+      status: "crashed",
+      currentStepId: asStepId("step-1"),
+      visitedStepIds: [asStepId("step-1")],
+      kickoffPrompts: { [asStepId("step-1")]: "do something" } as Record<StepId, string>,
+    });
+    const active = makeActiveRun(snap);
+
+    const rm: PartialRunManager = {
+      get: (_prefix: string) => active,
+      retryStep: async (_runId: RunId) => {
+        throw new WorkflowConfigError("Malformed JSON in workflow: ...");
+      },
+    } as unknown as PartialRunManager;
+
+    const handler = createRunRetryStepHandler(rm as unknown as RunManager);
+    const err = await handler({ runId: asRunId("abc12345") }, noopCtx).catch((e) => e);
+
+    expect(err).toBeInstanceOf(RpcError);
+    expect((err as RpcError).code).toBe(RpcErrorCode.WORKFLOW_INVALID);
+    expect((err as RpcError).message).toContain("Malformed JSON");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -431,6 +455,8 @@ interface FakeEventLogControls {
   disk: EventLogEntry[];
   ringCalls: StepId[];
   diskCalls: StepId[];
+  readEventsSinceCalls: number[];
+  flushCalls: number;
 }
 
 function makeFakeEventLog(): {
@@ -442,6 +468,8 @@ function makeFakeEventLog(): {
     disk: [],
     ringCalls: [],
     diskCalls: [],
+    readEventsSinceCalls: [],
+    flushCalls: 0,
   };
   const eventLog = {
     runDir: "/tmp/run-dir",
@@ -455,6 +483,13 @@ function makeFakeEventLog(): {
     ): Promise<EventLogEntry[]> => {
       controls.diskCalls.push(stepId);
       return controls.disk;
+    },
+    readEventsSince: async (fromSeq: number): Promise<ReadEventsSinceResult> => {
+      controls.readEventsSinceCalls.push(fromSeq);
+      return { entries: controls.disk.filter((e) => e.seq > fromSeq), truncated: false };
+    },
+    flush: async (): Promise<void> => {
+      controls.flushCalls++;
     },
     close: async () => {},
   } as unknown as EventLog;
@@ -661,6 +696,70 @@ describe("createRunAttachHandler", () => {
     expect(active.subscribers.size).toBe(0);
   });
 
+  it("closes owned EventLog via ctx.onClose when active.eventLog is null", async () => {
+    const stepId = asStepId("step-1");
+    const snap = makeSnapshot({ currentStepId: stepId, status: "completed" });
+    const { eventLog, controls } = makeFakeEventLog();
+    controls.ring = [];
+    const active = makeAttachActiveRun({ snap }); // no eventLog — terminal run
+
+    let closeCalled = false;
+    (eventLog as unknown as Record<string, unknown>).close = async () => {
+      closeCalled = true;
+    };
+
+    const rm = {
+      get: () => active,
+      attachSubscriber: (_runId: RunId, sub: RunSubscriber) => {
+        active.subscribers.add(sub);
+        return () => active.subscribers.delete(sub);
+      },
+      openEventLog: async (_runId: RunId) => eventLog,
+    } as unknown as RunManager;
+
+    const ctx = createMockRpcContext();
+    const handler = createRunAttachHandler(rm);
+    await handler({ runId: asRunId("abc12345") }, ctx);
+
+    expect(closeCalled).toBe(false);
+    ctx.triggerClose();
+    // close() is async; give the microtask queue a turn.
+    await Promise.resolve();
+    expect(closeCalled).toBe(true);
+  });
+
+  it("does not close active.eventLog owned by the runner on ctx.onClose", async () => {
+    const stepId = asStepId("step-1");
+    const snap = makeSnapshot({ currentStepId: stepId, status: "running" });
+    const { eventLog, controls } = makeFakeEventLog();
+    controls.ring = [];
+
+    let closeCalled = false;
+    (eventLog as unknown as Record<string, unknown>).close = async () => {
+      closeCalled = true;
+    };
+
+    // eventLog is passed in active — simulates a running run where the runner owns it
+    const active = makeAttachActiveRun({ snap, eventLog });
+
+    const rm = {
+      get: () => active,
+      attachSubscriber: (_runId: RunId, sub: RunSubscriber) => {
+        active.subscribers.add(sub);
+        return () => active.subscribers.delete(sub);
+      },
+    } as unknown as RunManager;
+
+    const ctx = createMockRpcContext();
+    const handler = createRunAttachHandler(rm);
+    await handler({ runId: asRunId("abc12345") }, ctx);
+
+    ctx.triggerClose();
+    await Promise.resolve();
+    // The attach handler must not close a handle it does not own.
+    expect(closeCalled).toBe(false);
+  });
+
   it("propagates AMBIGUOUS_PREFIX as RpcError", async () => {
     const candidates = [asRunId("abc11111"), asRunId("abc22222")];
     const rm = {
@@ -762,6 +861,121 @@ describe("createRunAttachHandler", () => {
 
     expect(result.runId).toBe(asRunId("abc12345"));
     expect(result.backlog).toEqual([]);
+  });
+
+  it("returns fromSeq backlog with gap-closing on race", async () => {
+    const snap = makeSnapshot({ status: "completed" });
+    const { eventLog, controls } = makeFakeEventLog();
+    controls.disk = [makeEntry(10), makeEntry(11), makeEntry(12)];
+    const active = makeAttachActiveRun({ snap, eventLog });
+
+    const rm = {
+      get: () => active,
+      attachSubscriber: (_runId: RunId, sub: RunSubscriber) => {
+        active.subscribers.add(sub);
+        return () => active.subscribers.delete(sub);
+      },
+    } as unknown as RunManager;
+
+    const ctx = createMockRpcContext();
+    const handler = createRunAttachHandler(rm);
+    const result = await handler({ runId: asRunId("abc12345"), fromSeq: 9 }, ctx);
+
+    expect(result.backlog).toHaveLength(3);
+    expect(result.backlog.map((e: EventLogEntry) => e.seq)).toEqual([10, 11, 12]);
+    expect(controls.readEventsSinceCalls).toHaveLength(2);
+    expect(controls.readEventsSinceCalls[0]).toBe(9);
+    expect(controls.readEventsSinceCalls[1]).toBe(12);
+  });
+
+  it("deduplicates gap events when closing race window", async () => {
+    const snap = makeSnapshot({ status: "completed" });
+    const { eventLog, controls } = makeFakeEventLog();
+    const e10 = makeEntry(10);
+    const e11 = makeEntry(11);
+    const e12 = makeEntry(12);
+    controls.disk = [e10, e11, e12];
+    const active = makeAttachActiveRun({ snap, eventLog });
+
+    const rm = {
+      get: () => active,
+      attachSubscriber: (_runId: RunId, sub: RunSubscriber) => {
+        active.subscribers.add(sub);
+        return () => active.subscribers.delete(sub);
+      },
+    } as unknown as RunManager;
+
+    const ctx = createMockRpcContext();
+    const handler = createRunAttachHandler(rm);
+    const result = await handler({ runId: asRunId("abc12345"), fromSeq: 10 }, ctx);
+
+    expect(result.backlog).toHaveLength(2);
+    expect(result.backlog.map((e: EventLogEntry) => e.seq)).toEqual([11, 12]);
+    expect(controls.readEventsSinceCalls).toHaveLength(2);
+    expect(controls.readEventsSinceCalls[0]).toBe(10);
+    expect(controls.readEventsSinceCalls[1]).toBe(12);
+  });
+
+  it("flushes pending writes before gap-read to close the in-flight append race", async () => {
+    const snap = makeSnapshot({ status: "completed" });
+    const { eventLog, controls } = makeFakeEventLog();
+    controls.disk = [makeEntry(5), makeEntry(6)];
+    const active = makeAttachActiveRun({ snap, eventLog });
+
+    const callOrder: Array<"flush" | "readEventsSince"> = [];
+    const originalFlush = (eventLog as unknown as Record<string, unknown>).flush as () => Promise<void>;
+    (eventLog as unknown as Record<string, unknown>).flush = async () => {
+      callOrder.push("flush");
+      return originalFlush();
+    };
+    const originalRead = (eventLog as unknown as Record<string, unknown>).readEventsSince as (n: number) => Promise<ReadEventsSinceResult>;
+    (eventLog as unknown as Record<string, unknown>).readEventsSince = async (fromSeq: number) => {
+      callOrder.push("readEventsSince");
+      return originalRead(fromSeq);
+    };
+
+    const rm = {
+      get: () => active,
+      attachSubscriber: (_runId: RunId, sub: RunSubscriber) => {
+        active.subscribers.add(sub);
+        return () => active.subscribers.delete(sub);
+      },
+    } as unknown as RunManager;
+
+    const ctx = createMockRpcContext();
+    const handler = createRunAttachHandler(rm);
+    await handler({ runId: asRunId("abc12345"), fromSeq: 4 }, ctx);
+
+    expect(controls.flushCalls).toBe(1);
+    // gap-read is always the last readEventsSince; flush must precede it
+    const lastFlushPos = callOrder.lastIndexOf("flush");
+    const gapReadPos = callOrder.lastIndexOf("readEventsSince");
+    expect(lastFlushPos).toBeGreaterThanOrEqual(0);
+    expect(gapReadPos).toBeGreaterThan(lastFlushPos);
+  });
+
+  it("skips gap-read when currentStepId exists but backlog is empty (no anchor)", async () => {
+    const stepId = asStepId("step-1");
+    const snap = makeSnapshot({ currentStepId: stepId });
+    const { eventLog, controls } = makeFakeEventLog();
+    controls.ring = null;
+    controls.disk = [];
+    const active = makeAttachActiveRun({ snap, eventLog });
+
+    const rm = {
+      get: () => active,
+      attachSubscriber: (_runId: RunId, sub: RunSubscriber) => {
+        active.subscribers.add(sub);
+        return () => active.subscribers.delete(sub);
+      },
+    } as unknown as RunManager;
+
+    const ctx = createMockRpcContext();
+    const handler = createRunAttachHandler(rm);
+    const result = await handler({ runId: asRunId("abc12345") }, ctx);
+
+    expect(result.backlog).toHaveLength(0);
+    expect(controls.readEventsSinceCalls).toHaveLength(0);
   });
 });
 

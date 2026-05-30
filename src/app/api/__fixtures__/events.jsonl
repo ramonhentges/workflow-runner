@@ -1,0 +1,9 @@
+{"seq":1,"ts":1748548800000,"stepId":"step-1","event":{"type":"banner","step":{"id":"step-1","agent":"test/AGENT","description":"Test step","mode":"autonomous","ide":"opencode","model":"test-model","edges":[]},"index":0}}
+{"seq":2,"ts":1748548800001,"stepId":"step-1","event":{"type":"log","message":"Starting agent work"}}
+{"seq":3,"ts":1748548800002,"stepId":"step-1","event":{"type":"stream","kind":"message","chunk":"Thinking about "}}
+{"seq":4,"ts":1748548800003,"stepId":"step-1","event":{"type":"stream","kind":"message","chunk":"the task..."}}
+{"seq":5,"ts":1748548800004,"stepId":"step-1","event":{"type":"status","text":"Processing","color":"cyan"}}
+{"seq":6,"ts":1748548800005,"stepId":"step-1","event":{"type":"interactive","enabled":true}}
+{"seq":7,"ts":1748548800006,"stepId":"step-1","event":{"type":"log","message":"Waiting for user input","color":"yellow"}}
+{"seq":8,"ts":1748548800007,"stepId":"step-1","event":{"type":"interactive","enabled":false}}
+{"seq":9,"ts":1748548800008,"stepId":null,"event":{"type":"summary","summary":{"visited":["step-1"],"finishMessage":"Task complete","durationMs":8000}}}

@@ -15,7 +15,7 @@ describe("integration: concurrent runs", () => {
       );
 
       const starts = await Promise.all(
-        paths.map((p) => h.client.call("run.start", { workflowPath: p })),
+        paths.map((p) => h.client.call("run.start", { workflowPath: p, cwd: h.storageRoot })),
       );
       const ids = starts.map((s) => s.runId);
       expect(new Set(ids).size).toBe(3);

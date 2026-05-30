@@ -16,7 +16,10 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^0.22.1",
-    "@opentui/core": "^0.2.15"
+    "@hono/zod-openapi": "^1.4.0",
+    "@opentui/core": "^0.2.15",
+    "hono": "^4.12.23",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^20.19.41",

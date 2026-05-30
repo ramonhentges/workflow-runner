@@ -30,7 +30,7 @@ export interface RunListEntry {
 
 export interface RpcMethods {
   "run.start": {
-    params: { workflowPath: string };
+    params: { workflowPath: string; cwd: string };
     result: { runId: RunId; slug: RunSlug };
   };
   "run.ps": {

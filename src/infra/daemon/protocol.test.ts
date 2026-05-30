@@ -28,7 +28,7 @@ const _snapshot: RunSnapshot = {
 };
 
 // RpcMethods["run.start"]
-void ({ workflowPath: "/x" } satisfies RpcMethods["run.start"]["params"]);
+void ({ workflowPath: "/x", cwd: "/work" } satisfies RpcMethods["run.start"]["params"]);
 void ({ runId: _runId, slug: _slug } satisfies RpcMethods["run.start"]["result"]);
 
 // RpcMethods["run.ps"]

@@ -32,7 +32,9 @@ export interface SendArgs {
 
 export type DoctorArgs = Record<string, never>;
 
-export type DaemonArgs = Record<string, never>;
+export interface DaemonArgs {
+  apiPort?: number;
+}
 
 export const USAGE = {
   start: "Usage: workflow-runner start <workflow.json> [--detach|-d]",
@@ -42,7 +44,7 @@ export const USAGE = {
   attach: "Usage: workflow-runner attach [<run-id>]",
   send: "Usage: workflow-runner send <run-id> <message|->",
   doctor: "Usage: workflow-runner doctor",
-  daemon: "Usage: workflow-runner daemon",
+  daemon: "Usage: workflow-runner daemon [--api-port <port>]",
 } as const;
 
 function isHelpFlag(arg: string): boolean {
@@ -180,8 +182,29 @@ export function parseDaemonArgs(
   argv: readonly string[],
 ): ParseResult<DaemonArgs> {
   if (hasHelp(argv)) return { ok: true, help: true };
-  if (argv.length > 0) {
-    return { ok: false, error: `unexpected argument '${argv[0]}'` };
+  let apiPort: number | undefined;
+  let i = 0;
+  while (i < argv.length) {
+    const arg = argv[i]!;
+    let portStr: string | undefined;
+    if (arg === "--api-port") {
+      i++;
+      portStr = argv[i];
+      if (portStr === undefined) {
+        return { ok: false, error: "--api-port requires a value" };
+      }
+      i++;
+    } else if (arg.startsWith("--api-port=")) {
+      portStr = arg.slice("--api-port=".length);
+      i++;
+    } else {
+      return { ok: false, error: `unexpected argument '${arg}'` };
+    }
+    const n = parseInt(portStr, 10);
+    if (!Number.isFinite(n) || n < 0 || n > 65535) {
+      return { ok: false, error: `invalid port '${portStr}' for --api-port` };
+    }
+    apiPort = n;
   }
-  return { ok: true, value: {} };
+  return { ok: true, value: { apiPort } };
 }

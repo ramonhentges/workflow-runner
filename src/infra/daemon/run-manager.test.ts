@@ -127,10 +127,31 @@ describe("RunManager", () => {
     const factory = new FakeSessionFactory();
     const manager = new RunManager(tmpDir, factory);
 
-    const result = await manager.startRun(wfPath);
+    const result = await manager.startRun(wfPath, tmpDir);
 
     expect(result.runId).toHaveLength(8);
     expect(result.slug).toMatch(/^[a-z]+-[a-z]+$/);
+
+    await manager.shutdown();
+  });
+
+  it("startRun passes the provided cwd to the Runner via session factory args", async () => {
+    const wfPath = await writeWorkflow(tmpDir, "wf.json", SINGLE_STEP_WORKFLOW);
+    const explicitCwd = "/explicit/working/dir";
+    const capturedArgs: import("../../domain/runner.js").RunnerAgentSessionArgs[] = [];
+    const factory = new FakeSessionFactory({
+      onCreate: (args) => capturedArgs.push(args),
+      resolveOutcome: () => ({ kind: "finish", message: "done" }),
+    });
+    const manager = new RunManager(tmpDir, factory);
+
+    const { runId } = await manager.startRun(wfPath, explicitCwd);
+    const record = manager.get(runId);
+    if (!record) throw new Error("record not found");
+    await record.runPromise;
+
+    expect(capturedArgs).toHaveLength(1);
+    expect(capturedArgs[0]!.cwd).toBe(explicitCwd);
 
     await manager.shutdown();
   });
@@ -142,7 +163,7 @@ describe("RunManager", () => {
     });
     const manager = new RunManager(tmpDir, factory);
 
-    const { runId } = await manager.startRun(wfPath);
+    const { runId } = await manager.startRun(wfPath, tmpDir);
     const store = new RunStore({ storageRoot: tmpDir });
     const snap = await store.load(runId);
 
@@ -158,7 +179,7 @@ describe("RunManager", () => {
     });
     const manager = new RunManager(tmpDir, factory);
 
-    const { runId } = await manager.startRun(wfPath);
+    const { runId } = await manager.startRun(wfPath, tmpDir);
     const record = manager.get(runId);
     if (!record) throw new Error("record not found");
 
@@ -179,7 +200,7 @@ describe("RunManager", () => {
     });
     const manager = new RunManager(tmpDir, factory);
 
-    const { runId } = await manager.startRun(wfPath);
+    const { runId } = await manager.startRun(wfPath, tmpDir);
     const record = manager.get(runId);
     if (!record) throw new Error("record not found");
 
@@ -199,7 +220,7 @@ describe("RunManager", () => {
     });
     const manager = new RunManager(tmpDir, factory);
 
-    const { runId } = await manager.startRun(wfPath);
+    const { runId } = await manager.startRun(wfPath, tmpDir);
     const record = manager.get(runId);
     if (!record) throw new Error("record not found");
 
@@ -221,8 +242,8 @@ describe("RunManager", () => {
     const manager = new RunManager(tmpDir, factory);
 
     const [r1, r2] = await Promise.all([
-      manager.startRun(wfPath),
-      manager.startRun(wfPath),
+      manager.startRun(wfPath, tmpDir),
+      manager.startRun(wfPath, tmpDir),
     ]);
 
     expect(r1.runId).not.toBe(r2.runId);
@@ -255,8 +276,8 @@ describe("RunManager", () => {
     });
 
     const [r1, r2] = await Promise.all([
-      manager.startRun(wfPath),
-      manager.startRun(wfPath),
+      manager.startRun(wfPath, tmpDir),
+      manager.startRun(wfPath, tmpDir),
     ]);
 
     expect(r1.runId).not.toBe(r2.runId);
@@ -296,10 +317,10 @@ describe("RunManager", () => {
       generateSlug: () => slugs[slugIdx++]!,
     });
 
-    const r1 = await manager.startRun(wfPath);
+    const r1 = await manager.startRun(wfPath, tmpDir);
     expect(r1.runId).toBe(asRunId("aaaaaaaa"));
 
-    const r2 = await manager.startRun(wfPath);
+    const r2 = await manager.startRun(wfPath, tmpDir);
     expect(r2.runId).toBe(asRunId("bbbbbbbb"));
 
     await manager.shutdown();
@@ -310,11 +331,11 @@ describe("RunManager", () => {
     const factory = new ControllableSessionFactory();
     const manager = new RunManager(tmpDir, factory, { runLimit: 1 });
 
-    await manager.startRun(wfPath);
+    await manager.startRun(wfPath, tmpDir);
 
     let error: RunManagerError | undefined;
     try {
-      await manager.startRun(wfPath);
+      await manager.startRun(wfPath, tmpDir);
     } catch (e) {
       error = e as RunManagerError;
     }
@@ -343,9 +364,9 @@ describe("RunManager", () => {
 
     const manager = new RunManager(tmpDir, roundRobinFactory);
 
-    const r1 = await manager.startRun(wfPath);
-    const r2 = await manager.startRun(wfPath);
-    const r3 = await manager.startRun(wfPath);
+    const r1 = await manager.startRun(wfPath, tmpDir);
+    const r2 = await manager.startRun(wfPath, tmpDir);
+    const r3 = await manager.startRun(wfPath, tmpDir);
 
     expect(manager.list()).toHaveLength(3);
 
@@ -374,7 +395,7 @@ describe("RunManager", () => {
     });
     const manager = new RunManager(tmpDir, factory);
 
-    const { runId } = await manager.startRun(wfPath);
+    const { runId } = await manager.startRun(wfPath, tmpDir);
     const record = manager.get(runId);
     if (!record) throw new Error("record not found");
     await record.runPromise;
@@ -409,8 +430,8 @@ describe("RunManager", () => {
       generateSlug: () => slugs[slugIdx++]!,
     });
 
-    await manager.startRun(wfPath);
-    await manager.startRun(wfPath);
+    await manager.startRun(wfPath, tmpDir);
+    await manager.startRun(wfPath, tmpDir);
 
     let error: RunManagerError | undefined;
     try {
@@ -439,8 +460,8 @@ describe("RunManager", () => {
       generateSlug: () => slugs[slugIdx++]!,
     });
 
-    const r1 = await manager.startRun(wfPath);
-    await manager.startRun(wfPath);
+    const r1 = await manager.startRun(wfPath, tmpDir);
+    await manager.startRun(wfPath, tmpDir);
 
     const found = manager.get("aaa");
     expect(found).toBeDefined();
@@ -458,7 +479,7 @@ describe("RunManager", () => {
     });
     const manager = new RunManager(tmpDir, factory);
 
-    const { runId } = await manager.startRun(wfPath);
+    const { runId } = await manager.startRun(wfPath, tmpDir);
     const record = manager.get(runId);
     if (!record) throw new Error("record not found");
 
@@ -500,7 +521,7 @@ describe("RunManager", () => {
     const factory = new ControllableSessionFactory();
     const manager = new RunManager(tmpDir, factory);
 
-    const { runId } = await manager.startRun(wfPath);
+    const { runId } = await manager.startRun(wfPath, tmpDir);
 
     let error: RunManagerError | undefined;
     try {
@@ -522,7 +543,7 @@ describe("RunManager", () => {
     });
     const manager = new RunManager(tmpDir, factory);
 
-    const { runId } = await manager.startRun(wfPath);
+    const { runId } = await manager.startRun(wfPath, tmpDir);
     const record = manager.get(runId);
     if (!record) throw new Error("record not found");
 
@@ -574,7 +595,7 @@ describe("RunManager", () => {
     const factory = new ControllableSessionFactory();
     const manager = new RunManager(tmpDir, factory);
 
-    const { runId } = await manager.startRun(wfPath);
+    const { runId } = await manager.startRun(wfPath, tmpDir);
     await waitUntil(() => factory.lastSession !== undefined);
     await waitFor(30);
 
@@ -609,7 +630,7 @@ describe("RunManager", () => {
     const factory = new ControllableSessionFactory();
     const manager = new RunManager(tmpDir, factory);
 
-    const { runId } = await manager.startRun(wfPath);
+    const { runId } = await manager.startRun(wfPath, tmpDir);
 
     // Wait for session to be created and interactive event emitted
     await waitUntil(() => factory.lastSession !== undefined);
@@ -634,7 +655,7 @@ describe("RunManager", () => {
     const factory = new ControllableSessionFactory();
     const manager = new RunManager(tmpDir, factory);
 
-    const { runId } = await manager.startRun(wfPath);
+    const { runId } = await manager.startRun(wfPath, tmpDir);
 
     // Wait for session to be created
     await waitUntil(() => factory.lastSession !== undefined);
@@ -665,7 +686,7 @@ describe("RunManager", () => {
     const factory = new ControllableSessionFactory();
     const manager = new RunManager(tmpDir, factory);
 
-    const { runId } = await manager.startRun(wfPath);
+    const { runId } = await manager.startRun(wfPath, tmpDir);
 
     const received: EventLogEntry[] = [];
     const sub: RunSubscriber = { onEvent: (e) => received.push(e) };
@@ -741,7 +762,7 @@ describe("RunManager", () => {
     const factory = new ControllableSessionFactory();
     const manager = new RunManager(tmpDir, factory);
 
-    const { runId } = await manager.startRun(wfPath);
+    const { runId } = await manager.startRun(wfPath, tmpDir);
 
     // Wait for session to be created
     await waitUntil(() => factory.lastSession !== undefined);
@@ -770,7 +791,7 @@ describe("RunManager", () => {
     });
     const manager = new RunManager(tmpDir, factory);
 
-    const { runId } = await manager.startRun(wfPath);
+    const { runId } = await manager.startRun(wfPath, tmpDir);
     const record = manager.get(runId);
     if (!record) throw new Error("record not found");
 
@@ -813,8 +834,8 @@ describe("RunManager", () => {
       createMcpServer: mockCreateMcpServer,
     });
 
-    await manager.startRun(wfPath);
-    await manager.startRun(wfPath);
+    await manager.startRun(wfPath, tmpDir);
+    await manager.startRun(wfPath, tmpDir);
 
     // Verify sessions are still active (not disposed)
     await waitUntil(() => factory.sessions.length >= 2);
@@ -863,7 +884,7 @@ describe("RunManager", () => {
       createMcpServer: mockCreateMcpServer,
     });
 
-    const { runId } = await manager.startRun(wfPath);
+    const { runId } = await manager.startRun(wfPath, tmpDir);
     const record = manager.get(runId);
     if (!record) throw new Error("record not found");
 
@@ -902,7 +923,7 @@ describe("RunManager", () => {
       createMcpServer: mockCreateMcpServer,
     });
 
-    const { runId } = await manager.startRun(wfPath);
+    const { runId } = await manager.startRun(wfPath, tmpDir);
     const record = manager.get(runId);
     if (!record) throw new Error("record not found");
 
@@ -944,7 +965,7 @@ describe("RunManager", () => {
 
     // Start 5 runs sequentially, waiting for each to complete
     for (let i = 0; i < 5; i++) {
-      const { runId } = await manager.startRun(wfPath);
+      const { runId } = await manager.startRun(wfPath, tmpDir);
       const record = manager.get(runId);
       if (!record) throw new Error("record not found");
       await record.runPromise;
@@ -972,7 +993,7 @@ describe("RunManager", () => {
 
     const manager = new RunManager(tmpDir, factory);
 
-    const { runId } = await manager.startRun(wfPath);
+    const { runId } = await manager.startRun(wfPath, tmpDir);
     const record = manager.get(runId);
     if (!record) throw new Error("record not found");
 
@@ -995,7 +1016,7 @@ describe("RunManager", () => {
 
     const manager = new RunManager(tmpDir, factory);
 
-    const { runId } = await manager.startRun(wfPath);
+    const { runId } = await manager.startRun(wfPath, tmpDir);
     const record = manager.get(runId);
     if (!record) throw new Error("record not found");
 
@@ -1018,7 +1039,7 @@ describe("RunManager", () => {
     });
     const manager = new RunManager(tmpDir, factory);
 
-    const { runId } = await manager.startRun(wfPath);
+    const { runId } = await manager.startRun(wfPath, tmpDir);
     const record = manager.get(runId);
     if (!record) throw new Error("record not found");
     await record.runPromise;
@@ -1076,7 +1097,7 @@ describe("RunManager", () => {
         logger: mockLogger as unknown as undefined,
       });
 
-      const { runId } = await manager.startRun(wfPath);
+      const { runId } = await manager.startRun(wfPath, tmpDir);
       const record = manager.get(runId);
       if (!record) throw new Error("record not found");
 
@@ -1129,7 +1150,7 @@ describe("RunManager", () => {
         logger: mockLogger as unknown as undefined,
       });
 
-      const { runId } = await manager.startRun(wfPath);
+      const { runId } = await manager.startRun(wfPath, tmpDir);
       const record = manager.get(runId);
       if (!record) throw new Error("record not found");
 
@@ -1160,7 +1181,7 @@ describe("RunManager", () => {
     const manager = new RunManager(tmpDir, factory, { runLimit: 200 });
 
     const results = await Promise.all(
-      Array.from({ length: 100 }, () => manager.startRun(wfPath)),
+      Array.from({ length: 100 }, () => manager.startRun(wfPath, tmpDir)),
     );
 
     const ids = results.map((r) => r.runId);

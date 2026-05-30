@@ -112,7 +112,7 @@ export class RunManager {
     }
   }
 
-  async startRun(workflowPath: string): Promise<{ runId: RunId; slug: RunSlug }> {
+  async startRun(workflowPath: string, cwd: string): Promise<{ runId: RunId; slug: RunSlug }> {
     if (this.#activeRunCount() >= this.#runLimit) {
       throw new RunManagerError(
         "RUN_LIMIT_REACHED",
@@ -165,6 +165,7 @@ export class RunManager {
     }
 
     const runner = new Runner(workflow, this.#sessionFactory, record.mcpServer!, {
+      cwd,
       onStepBoundary: async (visited, nextStepId, nextInboundMessage) => {
         if (nextStepId !== null) {
           run.markStepEntered(nextStepId, nextInboundMessage ?? "");

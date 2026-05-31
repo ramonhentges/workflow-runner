@@ -80,6 +80,12 @@ export function registerRunEventsRoute(app: ApiApp, rm: RunManager): void {
       const filtered =
         stepId !== undefined ? entries.filter((e) => e.stepId === stepId) : entries;
 
+      // `truncated` reflects the *unfiltered* read window hitting the backlog cap, not whether
+      // the filtered (per-step) slice is complete. A client paging by stepId can receive
+      // `truncated: true` even when all of that step's events fit in the window (the cap was
+      // reached by other steps' events). The flag is still the correct signal for deciding
+      // whether to page forward: if the unfiltered window was capped there may be more entries
+      // beyond it regardless of the active filter.
       return c.json({ entries: filtered, truncated }, 200);
     } finally {
       if (ownedEventLog) {

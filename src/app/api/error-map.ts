@@ -12,6 +12,7 @@ export const ERROR_HTTP_STATUS: Record<number, number> = {
   [RpcErrorCode.AMBIGUOUS_PREFIX]: 409,
   [RpcErrorCode.RUN_LIMIT_REACHED]: 429,
   [RpcErrorCode.DAEMON_SHUTTING_DOWN]: 503,
+  [RpcErrorCode.CWD_INVALID]: 400,
 };
 
 export function httpStatusForError(err: RunManagerError): number {

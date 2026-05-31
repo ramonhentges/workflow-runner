@@ -9,6 +9,7 @@ const runsRoute = createRoute({
   request: {
     query: z.object({
       all: z.string().optional(),
+      cwd: z.string().optional(),
     }),
   },
   responses: {
@@ -25,10 +26,14 @@ const runsRoute = createRoute({
 
 export function registerRunsRoute(app: ApiApp, rm: RunManager): void {
   app.openapi(runsRoute, (c) => {
-    const { all } = c.req.valid("query");
+    const { all, cwd } = c.req.valid("query");
     const includeOldTerminal = all === "true";
 
-    const snapshots = rm.list({ includeOldTerminal });
+    let snapshots = rm.list({ includeOldTerminal });
+
+    if (cwd !== undefined) {
+      snapshots = snapshots.filter((snap) => snap.cwd === cwd);
+    }
 
     const runs = snapshots.map((snap) => {
       let attachedCount = 0;
@@ -42,6 +47,7 @@ export function registerRunsRoute(app: ApiApp, rm: RunManager): void {
         id: snap.id,
         slug: snap.slug,
         workflowPath: snap.workflowPath,
+        cwd: snap.cwd,
         currentStepId: snap.currentStepId,
         status: snap.status,
         startedAt: snap.startedAt,

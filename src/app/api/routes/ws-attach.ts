@@ -10,6 +10,7 @@ import { RpcErrorCode } from "../../../infra/daemon/protocol.js";
 import type { EventLogEntry } from "../../../infra/daemon/event-log.js";
 import {
   AttachFrameSchema,
+  EventsQuerySchema,
   InputFrameSchema,
   type AttachFrame,
 } from "../schema.js";
@@ -65,6 +66,8 @@ export function createWsConnectionRegistry(): WsConnectionRegistry {
 export interface PerConnectionOpts {
   idleTimeoutMs?: number;
   maxOutboundFrames?: number;
+  /** If set, onOpen immediately sends an error frame with this message and closes the connection. */
+  fromSeqError?: string;
 }
 
 /**
@@ -142,13 +145,16 @@ export function registerWsAttachRoute(
     upgradeWebSocket((c) => {
       const id = c.req.param("id") ?? "";
       const fromSeqStr = c.req.query("fromSeq");
-      const fromSeq =
-        fromSeqStr !== undefined && fromSeqStr !== ""
-          ? parseInt(fromSeqStr, 10)
-          : undefined;
-
-      // Increment before upgrade completes so the cap is effective immediately.
-      activeConnections++;
+      let fromSeq: number | undefined;
+      let fromSeqError: string | undefined;
+      if (fromSeqStr !== undefined && fromSeqStr !== "") {
+        const result = EventsQuerySchema.shape.fromSeq.safeParse(fromSeqStr);
+        if (result.success) {
+          fromSeq = result.data;
+        } else {
+          fromSeqError = "Invalid fromSeq: must be a non-negative integer";
+        }
+      }
 
       // Use a container so the WSContext can be shared between onOpen (where it
       // first becomes available) and the cleanup callback (where it must be
@@ -162,10 +168,16 @@ export function registerWsAttachRoute(
           registry?.unregister(wsRef.current);
           wsRef.current = null;
         }
-      });
+      }, { fromSeqError });
 
       return {
         onOpen: (_, ws) => {
+          // Increment here rather than in the factory so that an upgrade that
+          // aborts before onOpen fires (neither onOpen nor onClose will run)
+          // never consumes a slot. Bun guarantees onClose fires iff onOpen
+          // fired, so every increment here has a guaranteed matching decrement
+          // in onCleanedUp.
+          activeConnections++;
           wsRef.current = ws;
           registry?.register(ws);
           void state.onOpen(ws);
@@ -305,6 +317,13 @@ export function createPerConnectionState(
       capturedWs = ws;
       resetIdleTimer();
 
+      if (opts.fromSeqError !== undefined) {
+        sendFrame({ type: "error", code: "INVALID_QUERY", message: opts.fromSeqError });
+        ws.close(1008, "invalid query parameter");
+        cleanup();
+        return;
+      }
+
       // Resolve run — may have ended since the pre-upgrade check.
       let active;
       try {
@@ -437,6 +456,7 @@ export function createPerConnectionState(
           id: snapshot.id,
           slug: snapshot.slug,
           workflowPath: snapshot.workflowPath,
+          cwd: snapshot.cwd,
           status: snapshot.status,
           currentStepId: snapshot.currentStepId,
           visitedStepIds: snapshot.visitedStepIds,

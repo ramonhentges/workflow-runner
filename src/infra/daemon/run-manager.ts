@@ -1,4 +1,5 @@
-import { join } from "node:path";
+import { statSync } from "node:fs";
+import { isAbsolute, join } from "node:path";
 import {
   Run,
   type RunId,
@@ -113,6 +114,19 @@ export class RunManager {
   }
 
   async startRun(workflowPath: string, cwd: string): Promise<{ runId: RunId; slug: RunSlug }> {
+    if (!isAbsolute(cwd)) {
+      throw new RunManagerError("CWD_INVALID", `cwd must be an absolute path: ${cwd}`);
+    }
+    let cwdStat;
+    try {
+      cwdStat = statSync(cwd);
+    } catch {
+      throw new RunManagerError("CWD_INVALID", `cwd does not exist: ${cwd}`);
+    }
+    if (!cwdStat.isDirectory()) {
+      throw new RunManagerError("CWD_INVALID", `cwd is not a directory: ${cwd}`);
+    }
+
     if (this.#activeRunCount() >= this.#runLimit) {
       throw new RunManagerError(
         "RUN_LIMIT_REACHED",
@@ -137,7 +151,7 @@ export class RunManager {
       return s.id === runId || s.slug === slug;
     }));
 
-    const run = Run.create({ id: runId, slug, workflowPath });
+    const run = Run.create({ id: runId, slug, workflowPath, cwd });
     const runDir = join(this.#store.runsRoot, runId);
 
     // Reserve the slot synchronously before any I/O so a concurrent startRun
@@ -265,6 +279,7 @@ export class RunManager {
       id: snap.id,
       slug: snap.slug,
       workflowPath: snap.workflowPath,
+      cwd: snap.cwd,
       status: "running",
       currentStepId: snap.currentStepId,
       visitedStepIds: [...snap.visitedStepIds],

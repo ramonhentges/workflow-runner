@@ -115,6 +115,7 @@ describe("RpcErrorCode", () => {
     expect(RpcErrorCode.AMBIGUOUS_PREFIX).toBe(-32004);
     expect(RpcErrorCode.RUN_LIMIT_REACHED).toBe(-32005);
     expect(RpcErrorCode.DAEMON_SHUTTING_DOWN).toBe(-32006);
+    expect(RpcErrorCode.CWD_INVALID).toBe(-32007);
   });
 
   it("has no duplicate integer values", () => {

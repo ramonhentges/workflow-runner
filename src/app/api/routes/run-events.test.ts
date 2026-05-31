@@ -205,6 +205,8 @@ describe("GET /runs/:id/events — unit (event log ownership)", () => {
   });
 
   it("propagates truncated: true even after stepId filter narrows results", async () => {
+    // `truncated` reflects the unfiltered window hitting the backlog cap. Even when the per-step
+    // slice is small, the flag must pass through unchanged so callers know to page forward.
     const entries = [fakeEntry(1, "step-A"), fakeEntry(2, "step-B")];
     const mockLog = makeControlledLog(entries, true);
     const app = createApiApp(makeRm({ activeEventLog: mockLog }));

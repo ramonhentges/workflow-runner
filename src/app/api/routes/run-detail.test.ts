@@ -171,6 +171,26 @@ describe("GET /runs/:id — unit", () => {
     expect(typeof body.endedAt).toBe("number");
     expect(body.status).toBe("completed");
   });
+
+  it("cwd is present in RunDetail when snapshot has cwd", async () => {
+    const snap = fakeSnapshot("run005", "eager-hawk", "running", { cwd: "/projects/my-app" });
+    const app = createApiApp(makeRm({ type: "found", snap }));
+
+    const res = await app.request("/runs/run005");
+    const body = await res.json() as Record<string, unknown>;
+
+    expect(body.cwd).toBe("/projects/my-app");
+  });
+
+  it("cwd is absent in RunDetail when snapshot has no cwd", async () => {
+    const snap = fakeSnapshot("run006", "silent-cat");
+    const app = createApiApp(makeRm({ type: "found", snap }));
+
+    const res = await app.request("/runs/run006");
+    const body = await res.json() as Record<string, unknown>;
+
+    expect(body.cwd).toBeUndefined();
+  });
 });
 
 // ---------------------------------------------------------------------------

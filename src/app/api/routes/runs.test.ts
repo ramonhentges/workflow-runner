@@ -196,6 +196,59 @@ describe("GET /runs — unit", () => {
 
     expect(typeof body.runs[0].endedAt).toBe("number");
   });
+
+  it("cwd is present in run summary when snapshot has cwd", async () => {
+    const snap = fakeSnapshot("run001", "brave-otter", "running", { cwd: "/projects/my-app" });
+    const app = createApiApp(makeRm([snap]));
+    const res = await app.request("/runs");
+    const body = await res.json() as { runs: Record<string, unknown>[] };
+
+    expect(body.runs[0].cwd).toBe("/projects/my-app");
+  });
+
+  it("cwd is absent in run summary when snapshot has no cwd", async () => {
+    const snap = fakeSnapshot("run001", "brave-otter", "running");
+    const app = createApiApp(makeRm([snap]));
+    const res = await app.request("/runs");
+    const body = await res.json() as { runs: Record<string, unknown>[] };
+
+    expect(body.runs[0].cwd).toBeUndefined();
+  });
+
+  it("?cwd filter returns only runs matching the given cwd", async () => {
+    const snap1 = fakeSnapshot("run001", "brave-otter", "running", { cwd: "/projects/app-a" });
+    const snap2 = fakeSnapshot("run002", "cool-fox", "running", { cwd: "/projects/app-b" });
+    const snap3 = fakeSnapshot("run003", "dark-wolf", "running", { cwd: "/projects/app-a" });
+    const app = createApiApp(makeRm([snap1, snap2, snap3]));
+    const res = await app.request("/runs?cwd=/projects/app-a");
+    const body = await res.json() as { runs: { id: string }[] };
+
+    expect(body.runs).toHaveLength(2);
+    const ids = body.runs.map((r) => r.id);
+    expect(ids).toContain("run001");
+    expect(ids).toContain("run003");
+    expect(ids).not.toContain("run002");
+  });
+
+  it("?cwd filter excludes runs without a cwd", async () => {
+    const snapWithCwd = fakeSnapshot("run001", "brave-otter", "running", { cwd: "/projects/app-a" });
+    const snapNoCwd = fakeSnapshot("run002", "cool-fox", "running");
+    const app = createApiApp(makeRm([snapWithCwd, snapNoCwd]));
+    const res = await app.request("/runs?cwd=/projects/app-a");
+    const body = await res.json() as { runs: { id: string }[] };
+
+    expect(body.runs).toHaveLength(1);
+    expect(body.runs[0].id).toBe("run001");
+  });
+
+  it("?cwd filter returns empty list when no runs match", async () => {
+    const snap = fakeSnapshot("run001", "brave-otter", "running", { cwd: "/projects/app-a" });
+    const app = createApiApp(makeRm([snap]));
+    const res = await app.request("/runs?cwd=/projects/app-b");
+    const body = await res.json() as { runs: unknown[] };
+
+    expect(body.runs).toHaveLength(0);
+  });
 });
 
 // ---------------------------------------------------------------------------

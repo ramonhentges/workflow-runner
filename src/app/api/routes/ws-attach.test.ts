@@ -244,11 +244,11 @@ describe("WS /runs/:id/attach — pre-upgrade (HTTP responses)", () => {
   });
 
   it("returns 503 when max connections cap is reached", async () => {
-    // The counter lives inside registerWsAttachRoute's closure and can only be
-    // incremented by the upgradeWebSocket factory (which requires a real Bun
-    // server). We verify the constant is exported and the middleware path exists
-    // by checking that MAX_WS_CONNECTIONS is a positive integer and that a
-    // known run with an empty counter returns 404 (not 503).
+    // The counter lives inside registerWsAttachRoute's closure and is
+    // incremented inside onOpen (which requires a real Bun server to trigger).
+    // We verify the constant is exported and the middleware path exists by
+    // checking that MAX_WS_CONNECTIONS is a positive integer and that a known
+    // run with an empty counter returns 404 (not 503).
     expect(MAX_WS_CONNECTIONS).toBeGreaterThan(0);
 
     const app = createApiApp(makeRm({ getBehavior: "not-found" }));
@@ -436,6 +436,46 @@ describe("createPerConnectionState — fromSeq resume", () => {
       expect(backlogFrame.entries).toEqual([]);
       expect(backlogFrame.truncated).toBe(false);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Per-connection state — fromSeq NaN guard
+// ---------------------------------------------------------------------------
+
+describe("createPerConnectionState — fromSeq NaN guard", () => {
+  it("sends INVALID_QUERY error frame and closes when fromSeqError is set", async () => {
+    const rm = makeRm({ activeEventLog: makeEventLogMock([]) });
+    const mock = makeMockWs();
+    const state = createPerConnectionState(rm, "run001", undefined, () => {}, {
+      fromSeqError: "Invalid fromSeq: must be a non-negative integer",
+    });
+    await state.onOpen(mock.ws);
+
+    const frames = mock.sentFrames();
+    const errorFrame = frames.find((f) => f.type === "error");
+    expect(errorFrame).toBeDefined();
+    if (errorFrame?.type === "error") {
+      expect(errorFrame.code).toBe("INVALID_QUERY");
+      expect(errorFrame.message).toContain("fromSeq");
+    }
+    expect(mock.closeCalls().length).toBe(1);
+    expect(mock.closeCalls()[0]?.[0]).toBe(1008);
+  });
+
+  it("does not proceed to run resolution when fromSeqError is set", async () => {
+    // Verifies that no snapshot or backlog is sent — only the error frame.
+    const rm = makeRm({ activeEventLog: makeEventLogMock([fakeEntry(1)]) });
+    const mock = makeMockWs();
+    const state = createPerConnectionState(rm, "run001", undefined, () => {}, {
+      fromSeqError: "Invalid fromSeq: must be a non-negative integer",
+    });
+    await state.onOpen(mock.ws);
+
+    const frames = mock.sentFrames();
+    expect(frames.every((f) => f.type === "error")).toBe(true);
+    expect(frames.find((f) => f.type === "snapshot")).toBeUndefined();
+    expect(frames.find((f) => f.type === "backlog")).toBeUndefined();
   });
 });
 
@@ -683,6 +723,23 @@ describe("createPerConnectionState — cleanup on disconnect", () => {
     await new Promise((r) => setTimeout(r, 10));
 
     expect(closedCount).toBe(0);
+  });
+
+  it("does not call onCleanedUp when upgrade aborts before onOpen fires (no counter leak)", () => {
+    // Regression guard for the activeConnections leak fix: the factory creates
+    // state but if the TCP upgrade aborts before the WS handshake completes,
+    // neither onOpen nor onClose fires. onCleanedUp must NOT be called in that
+    // scenario, otherwise a paired increment (now in onOpen) would never happen
+    // but the decrement would run, corrupting the counter.
+    const rm = makeRm({ activeEventLog: makeEventLogMock([]) });
+    let cleanupCount = 0;
+
+    // Simulate factory: create state but call neither onOpen nor onClose.
+    createPerConnectionState(rm, "run001", undefined, () => {
+      cleanupCount++;
+    });
+
+    expect(cleanupCount).toBe(0);
   });
 
   it("calls onCleanedUp exactly once even if onClose is called multiple times", async () => {

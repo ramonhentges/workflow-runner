@@ -137,7 +137,6 @@ describe("RunManager", () => {
 
   it("startRun passes the provided cwd to the Runner via session factory args", async () => {
     const wfPath = await writeWorkflow(tmpDir, "wf.json", SINGLE_STEP_WORKFLOW);
-    const explicitCwd = "/explicit/working/dir";
     const capturedArgs: import("../../domain/runner.js").RunnerAgentSessionArgs[] = [];
     const factory = new FakeSessionFactory({
       onCreate: (args) => capturedArgs.push(args),
@@ -145,15 +144,52 @@ describe("RunManager", () => {
     });
     const manager = new RunManager(tmpDir, factory);
 
-    const { runId } = await manager.startRun(wfPath, explicitCwd);
+    const { runId } = await manager.startRun(wfPath, tmpDir);
     const record = manager.get(runId);
     if (!record) throw new Error("record not found");
     await record.runPromise;
 
     expect(capturedArgs).toHaveLength(1);
-    expect(capturedArgs[0]!.cwd).toBe(explicitCwd);
+    expect(capturedArgs[0]!.cwd).toBe(tmpDir);
 
     await manager.shutdown();
+  });
+
+  it("startRun rejects a relative cwd with CWD_INVALID before creating any run state", async () => {
+    const wfPath = await writeWorkflow(tmpDir, "wf.json", SINGLE_STEP_WORKFLOW);
+    const factory = new FakeSessionFactory();
+    const manager = new RunManager(tmpDir, factory);
+
+    const err = await manager.startRun(wfPath, "relative/path").catch((e) => e);
+
+    expect(err).toBeInstanceOf(RunManagerError);
+    expect(err.code).toBe(RpcErrorCode.CWD_INVALID);
+    expect(manager.list()).toHaveLength(0);
+  });
+
+  it("startRun rejects a non-existent absolute cwd with CWD_INVALID before creating any run state", async () => {
+    const wfPath = await writeWorkflow(tmpDir, "wf.json", SINGLE_STEP_WORKFLOW);
+    const factory = new FakeSessionFactory();
+    const manager = new RunManager(tmpDir, factory);
+
+    const err = await manager.startRun(wfPath, "/nonexistent/dir/that/does/not/exist").catch((e) => e);
+
+    expect(err).toBeInstanceOf(RunManagerError);
+    expect(err.code).toBe(RpcErrorCode.CWD_INVALID);
+    expect(manager.list()).toHaveLength(0);
+  });
+
+  it("startRun rejects a file path as cwd with CWD_INVALID", async () => {
+    const wfPath = await writeWorkflow(tmpDir, "wf.json", SINGLE_STEP_WORKFLOW);
+    const factory = new FakeSessionFactory();
+    const manager = new RunManager(tmpDir, factory);
+
+    // wfPath is an absolute path to a file, not a directory
+    const err = await manager.startRun(wfPath, wfPath).catch((e) => e);
+
+    expect(err).toBeInstanceOf(RunManagerError);
+    expect(err.code).toBe(RpcErrorCode.CWD_INVALID);
+    expect(manager.list()).toHaveLength(0);
   });
 
   it("startRun immediately persists meta.json with status: running", async () => {
@@ -168,6 +204,26 @@ describe("RunManager", () => {
     const snap = await store.load(runId);
 
     expect(snap.status).toBe("running");
+
+    await manager.shutdown();
+  });
+
+  it("startRun persists cwd in meta.json and exposes it on the run snapshot", async () => {
+    const wfPath = await writeWorkflow(tmpDir, "wf.json", SINGLE_STEP_WORKFLOW);
+    const factory = new FakeSessionFactory();
+    const manager = new RunManager(tmpDir, factory);
+
+    const { runId } = await manager.startRun(wfPath, tmpDir);
+
+    // In-memory snapshot must include cwd.
+    const record = manager.get(runId);
+    if (!record) throw new Error("record not found");
+    expect(record.run.snapshot().cwd).toBe(tmpDir);
+
+    // Persisted snapshot must include cwd.
+    const store = new RunStore({ storageRoot: tmpDir });
+    const persisted = await store.load(runId);
+    expect(persisted.cwd).toBe(tmpDir);
 
     await manager.shutdown();
   });

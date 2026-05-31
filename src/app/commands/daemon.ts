@@ -10,7 +10,6 @@ export interface DaemonDeps {
 export async function run(argv: string[], deps: DaemonDeps = {}): Promise<number> {
   const stdout = deps.stdout ?? process.stdout;
   const stderr = deps.stderr ?? process.stderr;
-  const runDaemonFn = deps.runDaemon ?? (() => defaultRunDaemon({}));
 
   const parsed = parseDaemonArgs(argv);
   if (!parsed.ok) {
@@ -21,6 +20,9 @@ export async function run(argv: string[], deps: DaemonDeps = {}): Promise<number
     stdout.write(`${USAGE.daemon}\n`);
     return 0;
   }
+
+  const { apiPort } = parsed.value;
+  const runDaemonFn = deps.runDaemon ?? (() => defaultRunDaemon({ apiPort }));
 
   try {
     const result = await runDaemonFn();

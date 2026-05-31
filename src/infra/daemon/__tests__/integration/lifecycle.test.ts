@@ -11,7 +11,7 @@ describe("integration: lifecycle", () => {
         { id: "step-1", description: "fake:complete" },
       ]);
 
-      const { runId } = await h.client.call("run.start", { workflowPath });
+      const { runId } = await h.client.call("run.start", { workflowPath, cwd: h.storageRoot });
       expect(runId).toBeTruthy();
 
       const completedSnap = await waitFor(

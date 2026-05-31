@@ -10,7 +10,7 @@ describe("integration: stop semantics", () => {
       const workflowPath = await writeFakeWorkflow(h.storageRoot, "stop-sem", [
         { id: "step-1", description: "fake:hang" },
       ]);
-      const { runId } = await h.client.call("run.start", { workflowPath });
+      const { runId } = await h.client.call("run.start", { workflowPath, cwd: h.storageRoot });
 
       await waitFor(
         async () => {

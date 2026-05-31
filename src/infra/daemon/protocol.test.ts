@@ -28,7 +28,7 @@ const _snapshot: RunSnapshot = {
 };
 
 // RpcMethods["run.start"]
-void ({ workflowPath: "/x" } satisfies RpcMethods["run.start"]["params"]);
+void ({ workflowPath: "/x", cwd: "/work" } satisfies RpcMethods["run.start"]["params"]);
 void ({ runId: _runId, slug: _slug } satisfies RpcMethods["run.start"]["result"]);
 
 // RpcMethods["run.ps"]
@@ -115,6 +115,7 @@ describe("RpcErrorCode", () => {
     expect(RpcErrorCode.AMBIGUOUS_PREFIX).toBe(-32004);
     expect(RpcErrorCode.RUN_LIMIT_REACHED).toBe(-32005);
     expect(RpcErrorCode.DAEMON_SHUTTING_DOWN).toBe(-32006);
+    expect(RpcErrorCode.CWD_INVALID).toBe(-32007);
   });
 
   it("has no duplicate integer values", () => {

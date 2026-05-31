@@ -21,6 +21,7 @@ export interface RunListEntry {
   id: RunId;
   slug: RunSlug;
   workflowPath: string;
+  cwd?: string;
   currentStepId: StepId | null;
   status: RunStatus;
   startedAt: number;
@@ -30,7 +31,7 @@ export interface RunListEntry {
 
 export interface RpcMethods {
   "run.start": {
-    params: { workflowPath: string };
+    params: { workflowPath: string; cwd: string };
     result: { runId: RunId; slug: RunSlug };
   };
   "run.ps": {
@@ -76,6 +77,7 @@ export const RpcErrorCode = {
   AMBIGUOUS_PREFIX: -32004,
   RUN_LIMIT_REACHED: -32005,
   DAEMON_SHUTTING_DOWN: -32006,
+  CWD_INVALID: -32007,
 } as const;
 
 export type RpcErrorName = keyof typeof RpcErrorCode;

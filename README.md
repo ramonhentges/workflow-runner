@@ -137,6 +137,47 @@ workflow-runner doctor
 
 Reports per subsystem: socket reachable, lockfile valid, active run count, active agent subprocess count, disk usage. Exits non-zero only if any subsystem reports `FAIL`.
 
+## HTTP + WebSocket API
+
+The daemon exposes an HTTP/WS API on `127.0.0.1` (loopback only). The default port is **4517**,
+overridable with `--api-port` or `WORKFLOW_RUNNER_API_PORT`. The live port is always written to
+`daemon.json` in the storage root (see Discovery below).
+
+### HTTP Endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/health` | Daemon liveness snapshot (`status`, `pid`, `uptimeMs`, `activeRuns`, `version`). |
+| GET | `/runs` | List active + recent runs. `?all=true` includes all terminal-state runs. |
+| GET | `/runs/:id` | Run detail snapshot (id or unambiguous slug-prefix). 404 unknown, 409 ambiguous. |
+| GET | `/runs/:id/events` | Historical events page. `?fromSeq=N` and/or `?stepId=X`. |
+| POST | `/runs` | Start a run. Body: `{ "workflowPath": "...", "cwd": "..." }` (both required). |
+| POST | `/runs/:id/stop` | Stop a run gracefully then forcefully. |
+| POST | `/runs/:id/retry-step` | Retry the failing step of a crashed/failed/aborted run. |
+| GET | `/openapi.json` | OpenAPI 3.0 document describing all endpoints. |
+
+### WebSocket Endpoint
+
+```
+WS /runs/:id/attach[?fromSeq=N]
+```
+
+Streams live run events as lean JSON frames. See [`docs/ws-protocol.md`](docs/ws-protocol.md)
+for the full frame schema, `fromSeq` resume semantics, close codes, and the `input` frame for
+interactive steps.
+
+### Discovery File
+
+When the daemon starts it writes `daemon.json` to the storage root (mode `0600`):
+
+```json
+{ "pid": 12345, "apiPort": 4517, "socket": "/path/to/daemon.sock" }
+```
+
+Consumers should read `daemon.json` to obtain the live port rather than hardcoding 4517. The file
+is removed on graceful shutdown. Consumers can cross-check `pid` liveness using the same pattern
+as the lockfile.
+
 ## Development
 
 ### Running Tests

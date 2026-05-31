@@ -70,6 +70,32 @@ describe("start.run", () => {
     expect(mock.closed).toBe(true);
   });
 
+  it("sends process.cwd() as cwd in the run.start RPC request", async () => {
+    const runId = asRunId("rid-cwd");
+    const slug = asRunSlug("cwd-otter");
+    const mock = createMockClient({
+      responders: {
+        "run.start": () => ({ runId, slug }),
+      },
+    });
+
+    const stdout = makeStream();
+    const stderr = makeStream();
+
+    await start.run(["workflow.json", "--detach"], {
+      connect: async () => mock.asClient(),
+      isTty: () => false,
+      stdout,
+      stderr,
+    });
+
+    const startCall = mock.calls.find((c) => c.method === "run.start");
+    expect(startCall).toBeDefined();
+    const params = startCall!.params as { workflowPath: string; cwd: string };
+    expect(params.workflowPath).toBe("workflow.json");
+    expect(params.cwd).toBe(process.cwd());
+  });
+
   it("with --detach: prints '{runId} {slug}' to stdout and skips attach", async () => {
     const runId = asRunId("rid-2");
     const slug = asRunSlug("wise-fox");

@@ -10,7 +10,7 @@ describe("integration: attach/detach", () => {
       const workflowPath = await writeFakeWorkflow(h.storageRoot, "attach-detach", [
         { id: "step-1", description: "fake:hang" },
       ]);
-      const { runId } = await h.client.call("run.start", { workflowPath });
+      const { runId } = await h.client.call("run.start", { workflowPath, cwd: h.storageRoot });
 
       // Wait until the run has entered step-1 so attach replay has a banner to send.
       await waitFor(
@@ -78,7 +78,7 @@ describe("integration: attach/detach", () => {
       const workflowPath = await writeFakeWorkflow(h.storageRoot, "attach-prefix", [
         { id: "step-1", description: "fake:hang" },
       ]);
-      const { runId } = await h.client.call("run.start", { workflowPath });
+      const { runId } = await h.client.call("run.start", { workflowPath, cwd: h.storageRoot });
 
       await waitFor(
         async () => {

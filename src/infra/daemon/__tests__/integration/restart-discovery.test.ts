@@ -39,7 +39,7 @@ describe("integration: daemon-restart discovery", () => {
       const workflowPath = await writeFakeWorkflow(storageRoot, "restart", [
         { id: "step-1", description: "fake:hang" },
       ]);
-      const { runId } = await client1.call("run.start", { workflowPath });
+      const { runId } = await client1.call("run.start", { workflowPath, cwd: storageRoot });
 
       await waitFor(
         async () => {

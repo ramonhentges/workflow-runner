@@ -78,12 +78,30 @@ describe("createRunStartHandler", () => {
   it("returns runId and slug on success", async () => {
     const expected = { runId: asRunId("abc12345"), slug: asRunSlug("brave-otter") };
     const rm = {
-      startRun: async (_path: string) => expected,
+      startRun: async (_path: string, _cwd: string) => expected,
     } as unknown as RunManager;
 
     const handler = createRunStartHandler(rm);
-    const result = await handler({ workflowPath: "/tmp/wf.json" }, noopCtx);
+    const result = await handler({ workflowPath: "/tmp/wf.json", cwd: "/work" }, noopCtx);
     expect(result).toEqual(expected);
+  });
+
+  it("forwards cwd unchanged to RunManager.startRun", async () => {
+    const expected = { runId: asRunId("abc12345"), slug: asRunSlug("brave-otter") };
+    const startRunCalls: Array<{ path: string; cwd: string }> = [];
+    const rm = {
+      startRun: async (path: string, cwd: string) => {
+        startRunCalls.push({ path, cwd });
+        return expected;
+      },
+    } as unknown as RunManager;
+
+    const handler = createRunStartHandler(rm);
+    await handler({ workflowPath: "/tmp/wf.json", cwd: "/my/project" }, noopCtx);
+
+    expect(startRunCalls).toHaveLength(1);
+    expect(startRunCalls[0]!.cwd).toBe("/my/project");
+    expect(startRunCalls[0]!.path).toBe("/tmp/wf.json");
   });
 
   it("maps WorkflowConfigError to WORKFLOW_INVALID", async () => {
@@ -94,7 +112,7 @@ describe("createRunStartHandler", () => {
     } as unknown as RunManager;
 
     const handler = createRunStartHandler(rm);
-    const err = await handler({ workflowPath: "/tmp/bad.json" }, noopCtx).catch((e) => e);
+    const err = await handler({ workflowPath: "/tmp/bad.json", cwd: "/work" }, noopCtx).catch((e) => e);
     expect(err).toBeInstanceOf(RpcError);
     expect((err as RpcError).code).toBe(RpcErrorCode.WORKFLOW_INVALID);
     expect((err as RpcError).message).toContain("Malformed JSON");
@@ -109,7 +127,7 @@ describe("createRunStartHandler", () => {
     } as unknown as RunManager;
 
     const handler = createRunStartHandler(rm);
-    const err = await handler({ workflowPath: "/tmp/wf.json" }, noopCtx).catch((e) => e);
+    const err = await handler({ workflowPath: "/tmp/wf.json", cwd: "/work" }, noopCtx).catch((e) => e);
     expect(err).toBe(infraError);
     expect(err).not.toBeInstanceOf(RpcError);
   });
@@ -122,7 +140,7 @@ describe("createRunStartHandler", () => {
     } as unknown as RunManager;
 
     const handler = createRunStartHandler(rm);
-    const err = await handler({ workflowPath: "/tmp/wf.json" }, noopCtx).catch((e) => e);
+    const err = await handler({ workflowPath: "/tmp/wf.json", cwd: "/work" }, noopCtx).catch((e) => e);
     expect(err).toBeInstanceOf(RpcError);
     expect((err as RpcError).code).toBe(RpcErrorCode.RUN_LIMIT_REACHED);
   });

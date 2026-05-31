@@ -15,6 +15,10 @@ import type { Socket, UnixSocketListener } from "bun";
 
 import type { RunnerAgentSessionFactory } from "../../domain/runner.js";
 import { AcpAgentSessionFactory } from "../acp/agent-session.js";
+import { createApiApp } from "../../app/api/app.js";
+import { websocket, createWsConnectionRegistry } from "../../app/api/routes/ws-attach.js";
+import { DEFAULT_API_PORT } from "../../app/api/security.js";
+import type { DiscoveryFile } from "../../app/api/schema.js";
 import { DaemonLogger } from "./daemon-log.js";
 import { RunManager } from "./run-manager.js";
 import { RunStore } from "./run-store.js";
@@ -34,9 +38,59 @@ const FILE_MODE = 0o600;
 const SOCKET_FILENAME = "daemon.sock";
 const LOCKFILE_FILENAME = "daemon.lock";
 const DAEMON_LOG_FILENAME = "daemon.log";
+const DISCOVERY_FILE_FILENAME = "daemon.json";
 
 export interface RunDaemonOptions {
   storageRoot?: string;
+  /** API server port. Overrides WORKFLOW_RUNNER_API_PORT env and the 4517 default. */
+  apiPort?: number;
+}
+
+/**
+ * Resolves the API port: explicit opt > WORKFLOW_RUNNER_API_PORT env > DEFAULT_API_PORT.
+ * Exported for unit testing.
+ */
+export function resolveApiPort(
+  opts: RunDaemonOptions,
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  if (opts.apiPort !== undefined) return opts.apiPort;
+  const envVal = env.WORKFLOW_RUNNER_API_PORT;
+  if (envVal) {
+    const n = parseInt(envVal, 10);
+    if (Number.isFinite(n) && n >= 0 && n <= 65535) return n;
+  }
+  return DEFAULT_API_PORT;
+}
+
+/**
+ * Asserts the bound hostname is IPv4 loopback. Aborts daemon startup if not.
+ * Exported for unit testing.
+ */
+export function assertLoopbackBind(hostname: string): void {
+  if (hostname !== "127.0.0.1") {
+    throw new Error(
+      `API listener bound to non-loopback address '${hostname}'; daemon startup aborted`,
+    );
+  }
+}
+
+/**
+ * Writes the discovery file (daemon.json) with 0600 permissions.
+ * Exported for unit testing.
+ */
+export function writeDiscoveryFile(filePath: string, content: DiscoveryFile): void {
+  const json = JSON.stringify(content);
+  const fd = openSync(filePath, "w", FILE_MODE);
+  try {
+    writeSync(fd, json);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+  try {
+    chmodSync(filePath, FILE_MODE);
+  } catch {}
 }
 
 export class DaemonAlreadyRunningError extends Error {
@@ -235,8 +289,20 @@ export function bindSocket(opts: BindSocketOptions): UnixSocketListener<ConnStat
   return listener;
 }
 
+const WS_DRAIN_GRACE_MS = 200;
+
 export interface ShutdownDeps {
   listener: { stop(closeActiveConnections?: boolean): void };
+  /** HTTP/WS API server — stopped after WS drain, before UDS listener. */
+  apiServer?: { stop(closeActiveConnections?: boolean): void };
+  /** Path to daemon.json — removed on shutdown after socket cleanup. */
+  discoveryFilePath?: string;
+  /**
+   * Drains open WebSocket connections before the API server stops.
+   * Returns the number of connections that were sent a close frame.
+   * Zero connections → returns 0 immediately (no grace-period wait).
+   */
+  wsDrain?: (graceMs?: number) => Promise<number>;
   runManager: { shutdown(): Promise<void> };
   lock: AcquiredLock | null;
   socketPath: string;
@@ -246,6 +312,13 @@ export interface ShutdownDeps {
 /**
  * Build the SIGTERM/SIGINT graceful-shutdown callback. The returned function
  * is idempotent — subsequent invocations are no-ops.
+ *
+ * Shutdown order:
+ *  1. Drain open WS clients (close frame + brief grace period).
+ *  2. Stop the HTTP/WS API server.
+ *  3. Stop the UDS listener.
+ *  4. RunManager.shutdown().
+ *  5. Remove socket / lockfile / daemon.json.
  */
 export function makeShutdown(deps: ShutdownDeps): (reason: string) => Promise<void> {
   let invoked = false;
@@ -253,9 +326,26 @@ export function makeShutdown(deps: ShutdownDeps): (reason: string) => Promise<vo
     if (invoked) return;
     invoked = true;
     deps.logger?.log({ level: "INFO", event: "daemon.shutdown", reason });
+
+    // 1. Drain open WS connections (send close frame + brief grace period).
+    if (deps.wsDrain) {
+      const drainedCount = await deps.wsDrain(WS_DRAIN_GRACE_MS).catch(() => 0);
+      deps.logger?.log({ level: "INFO", event: "api.shutdownDrain", drainedCount });
+    }
+
+    // 2. Stop the HTTP/WS API server.
+    if (deps.apiServer) {
+      try {
+        deps.apiServer.stop(true);
+      } catch {}
+    }
+
+    // 3. Stop the UDS listener.
     try {
       deps.listener.stop(true);
     } catch {}
+
+    // 4. RunManager shutdown.
     try {
       await deps.runManager.shutdown();
     } catch (err) {
@@ -265,9 +355,17 @@ export function makeShutdown(deps: ShutdownDeps): (reason: string) => Promise<vo
         msg: err instanceof Error ? err.message : String(err),
       });
     }
+
+    // 5. Remove socket / lockfile / daemon.json.
     try {
       if (existsSync(deps.socketPath)) unlinkSync(deps.socketPath);
     } catch {}
+    // Remove discovery file after socket so consumers fail-safe to "not running".
+    if (deps.discoveryFilePath) {
+      try {
+        if (existsSync(deps.discoveryFilePath)) unlinkSync(deps.discoveryFilePath);
+      } catch {}
+    }
     releaseLock(deps.lock);
     await deps.logger?.close();
   };
@@ -311,9 +409,9 @@ function registerHandlers(
 }
 
 /**
- * Daemon entry point. Acquires the lockfile, binds the UDS socket, instantiates
- * the RunManager, runs startup discovery, registers every JSON-RPC handler,
- * and serves connections until SIGTERM/SIGINT.
+ * Daemon entry point. Acquires the lockfile, binds the UDS socket, mounts the
+ * HTTP/WS API listener, instantiates the RunManager, runs startup discovery,
+ * registers every JSON-RPC handler, and serves connections until SIGTERM/SIGINT.
  */
 export async function runDaemon(opts: RunDaemonOptions = {}): Promise<void> {
   const storageRoot = opts.storageRoot ?? RunStore.resolveStorageRoot();
@@ -322,6 +420,7 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<void> {
   const socketPath = join(storageRoot, SOCKET_FILENAME);
   const lockPath = join(storageRoot, LOCKFILE_FILENAME);
   const logPath = join(storageRoot, DAEMON_LOG_FILENAME);
+  const discoveryFilePath = join(storageRoot, DISCOVERY_FILE_FILENAME);
 
   let lock: AcquiredLock;
   try {
@@ -336,15 +435,76 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<void> {
 
   const logger = await DaemonLogger.open(logPath);
   let listener: UnixSocketListener<ConnState | undefined> | null = null;
+  let apiServer: ReturnType<typeof Bun.serve> | null = null;
 
   const sessionFactory = await resolveSessionFactory();
   const runManager = new RunManager(storageRoot, sessionFactory, { logger });
+  const wsRegistry = createWsConnectionRegistry();
 
   let triggerExit: (reason: string) => void = () => {};
+
+  const configuredPort = resolveApiPort(opts);
 
   try {
     await runManager.discoverOnStartup();
 
+    // Bind the HTTP/WS API server first so we know the actual port before
+    // signalling readiness via the UDS socket. This ordering guarantees that
+    // when the harness/client sees the socket, daemon.json already exists.
+    //
+    // Deferred fetch container: lets us pass the actual bound port to createApiApp
+    // after Bun.serve returns (port 0 → OS-assigned; also needed for testing).
+    // JavaScript is single-threaded so appFetch is always updated before any
+    // HTTP request can be dispatched.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let appFetch: ((req: Request, srv: any) => Response | Promise<Response>) = () =>
+      new Response("Service Starting", { status: 503 });
+
+    try {
+      apiServer = Bun.serve({
+        port: configuredPort,
+        hostname: "127.0.0.1",
+        fetch: (req, srv) => appFetch(req, srv),
+        websocket,
+      });
+    } catch (bindErr) {
+      const msg = bindErr instanceof Error ? bindErr.message : String(bindErr);
+      logger.log({ level: "ERROR", event: "api.bindFailed", port: configuredPort, msg });
+      throw new Error(`Failed to bind API listener on port ${configuredPort}: ${msg}`);
+    }
+
+    // Post-listen loopback assertion — aborts startup if Bun bound to a non-loopback address.
+    const boundHostname = apiServer.hostname ?? "";
+    try {
+      assertLoopbackBind(boundHostname);
+    } catch (assertErr) {
+      logger.log({
+        level: "ERROR",
+        event: "api.bindRejected",
+        address: boundHostname,
+        msg: assertErr instanceof Error ? assertErr.message : String(assertErr),
+      });
+      apiServer.stop(true);
+      apiServer = null;
+      throw assertErr;
+    }
+
+    // Create the Hono app with the ACTUAL bound port so the allowlist is correct.
+    const actualPort = apiServer.port ?? 0;
+    const app = createApiApp(runManager, actualPort, wsRegistry);
+    appFetch = app.fetch as typeof appFetch;
+
+    // Write discovery file (0600) before binding the UDS socket so that
+    // any client that sees the socket can safely read daemon.json.
+    writeDiscoveryFile(discoveryFilePath, {
+      pid: process.pid,
+      apiPort: actualPort,
+      socket: socketPath,
+    });
+
+    logger.log({ level: "INFO", event: "api.started", port: actualPort });
+
+    // Bind the UDS socket last — this is the readiness signal for CLI clients.
     listener = bindSocket({
       socketPath,
       onConnection: async (duplex) => {
@@ -382,6 +542,9 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<void> {
   const exit = new Promise<void>((resolve) => {
     const shutdown = makeShutdown({
       listener: listener!,
+      apiServer: apiServer ?? undefined,
+      wsDrain: (graceMs) => wsRegistry.drain(graceMs),
+      discoveryFilePath,
       runManager,
       lock,
       socketPath,

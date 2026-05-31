@@ -47,7 +47,7 @@ export async function run(argv: string[], deps: StartDeps = {}): Promise<number>
 
   let startResult: { runId: RunId; slug: string };
   try {
-    startResult = await client.call("run.start", { workflowPath });
+    startResult = await client.call("run.start", { workflowPath, cwd: process.cwd() });
   } catch (err) {
     stderr.write(`workflow-runner: ${formatStartError(err)}\n`);
     await client.close();

@@ -1,14 +1,16 @@
-import { existsSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Subprocess } from "bun";
 
 import { connect, type DaemonClient } from "../../../client/client.js";
+import type { DiscoveryFile } from "../../../../app/api/schema.js";
 
 const HARNESS_ENTRY = new URL("../../entry.ts", import.meta.url).pathname;
 const DEFAULT_READY_TIMEOUT_MS = 10000;
 const SOCKET_FILENAME = "daemon.sock";
+const DISCOVERY_FILE_FILENAME = "daemon.json";
 
 export interface HarnessOptions {
   /** Additional env vars to set on the spawned daemon process. */
@@ -20,6 +22,7 @@ export interface HarnessOptions {
 export interface Harness {
   storageRoot: string;
   socketPath: string;
+  discoveryFilePath: string;
   daemon: Subprocess;
   client: DaemonClient;
   cleanup: () => Promise<void>;
@@ -46,6 +49,8 @@ export async function startDaemonHarness(opts: HarnessOptions = {}): Promise<Har
       NODE_ENV: "test",
       WORKFLOW_RUNNER_FAKE_FACTORY: "1",
       XDG_STATE_HOME: tempDir,
+      // Port 0 → OS-assigned port per test to avoid conflicts across parallel tests.
+      WORKFLOW_RUNNER_API_PORT: "0",
       ...opts.env,
     },
     stdout: "ignore",
@@ -65,14 +70,39 @@ export async function startDaemonHarness(opts: HarnessOptions = {}): Promise<Har
     await rm(tempDir, { recursive: true, force: true }).catch(() => {});
   };
 
+  const discoveryFilePath = join(storageRoot, DISCOVERY_FILE_FILENAME);
+
   try {
     await waitForSocket(socketPath, opts.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS, daemon);
     client = await connect({ storageRoot });
-    return { storageRoot, socketPath, daemon, client, cleanup };
+    return { storageRoot, socketPath, discoveryFilePath, daemon, client, cleanup };
   } catch (err) {
     await cleanup();
     throw err;
   }
+}
+
+/**
+ * Wait for daemon.json to appear and return its parsed contents.
+ * Used by tests that need the actual API port after daemon startup.
+ */
+export async function waitForDiscoveryFile(
+  storageRoot: string,
+  timeoutMs = 5000,
+): Promise<DiscoveryFile> {
+  const path = join(storageRoot, DISCOVERY_FILE_FILENAME);
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (existsSync(path)) {
+      try {
+        return JSON.parse(readFileSync(path, "utf8")) as DiscoveryFile;
+      } catch {
+        // File may still be writing — retry.
+      }
+    }
+    await sleep(25);
+  }
+  throw new Error(`discovery file ${path} did not appear within ${timeoutMs}ms`);
 }
 
 async function waitForSocket(

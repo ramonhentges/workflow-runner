@@ -290,14 +290,15 @@ export function createPerConnectionState(
           // Successfully sent: buffer is draining.
           backpressureCount = Math.max(0, backpressureCount - 1);
         }
-        return true;
       }
-      // Non-numeric status (e.g. void from test mock): message still sent, no status.
+      // Sent (numeric success or non-numeric status from test mock).
+      resetIdleTimer();
       return true;
     }
 
     // Fallback: Hono's ws.send() (no status feedback).
     ws.send(json);
+    resetIdleTimer();
     return true;
   };
 
@@ -388,22 +389,17 @@ export function createPerConnectionState(
           }
           backlogTruncated = truncated;
         }
-      } else if (currentStepId !== null) {
-        // Initial attach: return current-step backlog.
+      } else {
+        // Initial attach: return full-run backlog so prior steps are visible.
         if (eventLog) {
-          const fromRing = eventLog.currentStepBacklog(currentStepId);
-          if (fromRing !== null) {
-            backlog.push(...fromRing);
-          } else {
-            backlog.push(
-              ...(await eventLog
-                .readBackwardForCurrentStep(currentStepId)
-                .catch(() => [])),
-            );
+          const { entries: events, truncated } = await eventLog
+            .readEventsSince(0)
+            .catch(() => ({ entries: [] as EventLogEntry[], truncated: false }));
+          backlog.push(...events);
+          if (events.length > 0) {
+            maxBacklogSeq = events[events.length - 1]!.seq;
           }
-          if (backlog.length > 0) {
-            maxBacklogSeq = backlog[backlog.length - 1]!.seq;
-          }
+          backlogTruncated = truncated;
         }
       }
 

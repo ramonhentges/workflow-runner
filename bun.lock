@@ -5,7 +5,7 @@
     "": {
       "name": "acp-test",
       "dependencies": {
-        "@agentclientprotocol/sdk": "^0.22.1",
+        "@agentclientprotocol/sdk": "0.23.0",
         "@hono/zod-openapi": "^1.4.0",
         "@opentui/core": "^0.2.15",
         "hono": "^4.12.23",
@@ -55,7 +55,7 @@
   "packages": {
     "@adobe/css-tools": ["@adobe/css-tools@4.5.0", "", {}, "sha512-6OzddxPio9UiWTCemp4N8cYLV2ZN1ncRnV1cVGtve7dhPOtRkleRyx32GQCYSwDYgaHU3USMm84tNsvKzRCa1Q=="],
 
-    "@agentclientprotocol/sdk": ["@agentclientprotocol/sdk@0.22.1", "", { "peerDependencies": { "zod": "^3.25.0 || ^4.0.0" } }, "sha512-DfqXtl/8gO9NImq094MTaCXEU2vkhh6v7q/kT+9UjZxUqj8hYaya2OjLVIqn16MzNHcXEpShTR2RIauLSYeDQQ=="],
+    "@agentclientprotocol/sdk": ["@agentclientprotocol/sdk@0.23.0", "", { "peerDependencies": { "zod": "^3.25.0 || ^4.0.0" } }, "sha512-wIGDQMSXwhoSPNCJflSQvf4WeSU2Jq1bbPRAwwb49euo9qMcND5Pb80hD7hVfuAwz9ZvvDuzVrNTOZrvKPR9Eg=="],
 
     "@asamuzakjp/css-color": ["@asamuzakjp/css-color@5.1.11", "", { "dependencies": { "@asamuzakjp/generational-cache": "^1.0.1", "@csstools/css-calc": "^3.2.0", "@csstools/css-color-parser": "^4.1.0", "@csstools/css-parser-algorithms": "^4.0.0", "@csstools/css-tokenizer": "^4.0.0" } }, "sha512-KVw6qIiCTUQhByfTd78h2yD1/00waTmm9uy/R7Ck/ctUyAPj+AEDLkQIdJW0T8+qGgj3j5bpNKK7Q3G+LedJWg=="],
 

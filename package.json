@@ -23,7 +23,7 @@
     "turbo:test": "turbo run test"
   },
   "dependencies": {
-    "@agentclientprotocol/sdk": "^0.22.1",
+    "@agentclientprotocol/sdk": "0.23.0",
     "@hono/zod-openapi": "^1.4.0",
     "@opentui/core": "^0.2.15",
     "hono": "^4.12.23",

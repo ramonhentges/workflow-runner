@@ -9,6 +9,9 @@ import type {
   WriteTextFileResponse,
   ReadTextFileRequest,
   ReadTextFileResponse,
+  NewSessionResponse,
+  SessionConfigSelectOption,
+  SessionConfigSelectGroup,
 } from "@agentclientprotocol/sdk";
 
 import type { Step } from "../../domain/workflow.js";
@@ -56,6 +59,31 @@ export function buildKickoffPrompt(
     prompt += `\n\nContext from previous step: ${inboundMessage}`;
   }
   return prompt;
+}
+
+/**
+ * Extracts the set of valid mode (agent) ids from a `newSession` response.
+ *
+ * Standard ACP agents advertise modes via the `modes` field, but opencode leaves
+ * that unset and instead exposes mode selection as a `configOptions` entry
+ * (`id`/`category` of `"mode"`, a `select` whose option `value`s are the agent
+ * names). We read the standard field first for forward-compatibility, then fall
+ * back to the config option.
+ */
+export function availableModeIds(result: NewSessionResponse): string[] {
+  const standard = result.modes?.availableModes?.map((m) => m.id);
+  if (standard && standard.length > 0) return standard;
+
+  const modeOption = result.configOptions?.find(
+    (o) => o.type === "select" && (o.id === "mode" || o.category === "mode"),
+  );
+  if (!modeOption || modeOption.type !== "select") return [];
+
+  return modeOption.options.flatMap((entry) =>
+    "group" in entry
+      ? (entry as SessionConfigSelectGroup).options.map((o) => o.value)
+      : [(entry as SessionConfigSelectOption).value],
+  );
 }
 
 export class AcpAgentSessionFactory implements AgentSessionFactory {
@@ -235,16 +263,21 @@ export class AgentSession {
       const sessionId = asSessionId(sessionResult.sessionId);
       sink.log(`Session created: ${sessionId}`);
 
-      const availableModes = sessionResult.modes?.availableModes ?? [];
-      const modeExists = availableModes.some((m) => m.id === step.agent);
-
-      if (!modeExists) {
+      
+      const modeIds = availableModeIds(sessionResult);
+      if (modeIds.length > 0 && !modeIds.includes(step.agent)) {
         throw new Error(
-          `Step '${step.id}': agent '${step.agent}' is not a valid mode (available: ${availableModes.map((m) => m.id).join(", ")})`,
+          `Step '${step.id}': agent '${step.agent}' is not a valid mode (available: ${modeIds.join(", ")})`,
         );
       }
 
-      await connection.setSessionMode({ sessionId, modeId: step.agent });
+      try {
+        await connection.setSessionMode({ sessionId, modeId: step.agent });
+      } catch (err) {
+        throw new Error(
+          `Step '${step.id}': failed to set agent '${step.agent}': ${err}`,
+        );
+      }
       sink.log(`Mode set: ${step.agent}`);
 
       try {

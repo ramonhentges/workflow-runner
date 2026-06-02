@@ -8,7 +8,8 @@ import { registerStopRunRoute } from "./routes/stop-run.js";
 import { registerRetryStepRoute } from "./routes/retry-step.js";
 import { registerRunEventsRoute } from "./routes/run-events.js";
 import { registerWsAttachRoute, type WsConnectionRegistry } from "./routes/ws-attach.js";
-import { hostAllowlistMiddleware } from "./security.js";
+import { registerWorkflowsRoute } from "./routes/workflows.js";
+import { hostAllowlistMiddleware, corsMiddleware } from "./security.js";
 
 export type ApiApp = OpenAPIHono;
 
@@ -35,6 +36,10 @@ export function createApiApp(
 
   if (port !== undefined) {
     app.use("/*", hostAllowlistMiddleware(port));
+    const uiOrigin = process.env.WORKFLOW_RUNNER_UI_ORIGIN;
+    if (uiOrigin) {
+      app.use("/*", corsMiddleware(uiOrigin));
+    }
   }
 
   app.doc("/openapi.json", {
@@ -53,6 +58,7 @@ export function createApiApp(
   registerStopRunRoute(app, runManager);
   registerRetryStepRoute(app, runManager);
   registerRunEventsRoute(app, runManager);
+  registerWorkflowsRoute(app);
   registerWsAttachRoute(app, runManager, port, wsRegistry);
 
   return app;

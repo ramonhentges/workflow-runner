@@ -104,3 +104,20 @@ export const DiscoveryFileSchema = z.object({
   socket: z.string(),
 });
 export type DiscoveryFile = z.infer<typeof DiscoveryFileSchema>;
+
+// GET /workflows?cwd= (ADR-006).
+export const WorkflowsQuerySchema = z.object({
+  cwd: z.string().optional(),
+});
+export type WorkflowsQuery = z.infer<typeof WorkflowsQuerySchema>;
+
+export const WorkflowItemSchema = z.object({
+  name: z.string(),
+  path: z.string(),
+});
+export type WorkflowItem = z.infer<typeof WorkflowItemSchema>;
+
+export const WorkflowListSchema = z.object({
+  workflows: z.array(WorkflowItemSchema),
+});
+export type WorkflowList = z.infer<typeof WorkflowListSchema>;

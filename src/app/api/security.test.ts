@@ -1,8 +1,9 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { Hono } from "hono";
 import {
   DEFAULT_API_PORT,
   allowedHosts,
+  corsMiddleware,
   isOriginAllowed,
   hostAllowlistMiddleware,
 } from "./security.js";
@@ -294,5 +295,214 @@ describe("Host allowlist integration — all routes protected", () => {
       }),
     );
     expect(res.status).toBe(200);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isOriginAllowed — WORKFLOW_RUNNER_UI_ORIGIN env-var gating
+// ---------------------------------------------------------------------------
+
+describe("isOriginAllowed — WORKFLOW_RUNNER_UI_ORIGIN env-var", () => {
+  let savedEnv: string | undefined;
+
+  beforeEach(() => {
+    savedEnv = process.env.WORKFLOW_RUNNER_UI_ORIGIN;
+  });
+
+  afterEach(() => {
+    if (savedEnv === undefined) {
+      delete process.env.WORKFLOW_RUNNER_UI_ORIGIN;
+    } else {
+      process.env.WORKFLOW_RUNNER_UI_ORIGIN = savedEnv;
+    }
+  });
+
+  it("returns false for UI origin when env var is unset", () => {
+    delete process.env.WORKFLOW_RUNNER_UI_ORIGIN;
+    expect(isOriginAllowed("http://localhost:5173", DEFAULT_API_PORT)).toBe(false);
+  });
+
+  it("returns true for UI origin when env var matches", () => {
+    process.env.WORKFLOW_RUNNER_UI_ORIGIN = "http://localhost:5173";
+    expect(isOriginAllowed("http://localhost:5173", DEFAULT_API_PORT)).toBe(true);
+  });
+
+  it("loopback origin remains allowed regardless of env var", () => {
+    process.env.WORKFLOW_RUNNER_UI_ORIGIN = "http://localhost:5173";
+    expect(isOriginAllowed(`http://127.0.0.1:${DEFAULT_API_PORT}`, DEFAULT_API_PORT)).toBe(true);
+  });
+
+  it("returns false for evil origin even when a different UI origin is configured", () => {
+    process.env.WORKFLOW_RUNNER_UI_ORIGIN = "http://localhost:5173";
+    expect(isOriginAllowed("http://evil.example", DEFAULT_API_PORT)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// corsMiddleware — unit tests
+// ---------------------------------------------------------------------------
+
+describe("corsMiddleware", () => {
+  it("adds Access-Control-Allow-Origin for matching origin", async () => {
+    const app = new Hono();
+    app.use("/*", corsMiddleware("http://localhost:5173"));
+    app.get("/test", (c) => c.text("ok"));
+
+    const res = await app.request(
+      new Request("http://localhost/test", {
+        headers: { Origin: "http://localhost:5173" },
+      }),
+    );
+    expect(res.headers.get("Access-Control-Allow-Origin")).toBe("http://localhost:5173");
+  });
+
+  it("does not add Access-Control-Allow-Origin for non-matching origin", async () => {
+    const app = new Hono();
+    app.use("/*", corsMiddleware("http://localhost:5173"));
+    app.get("/test", (c) => c.text("ok"));
+
+    const res = await app.request(
+      new Request("http://localhost/test", {
+        headers: { Origin: "http://evil.example" },
+      }),
+    );
+    expect(res.headers.get("Access-Control-Allow-Origin")).toBeNull();
+  });
+
+  it("does not add Access-Control-Allow-Origin when Origin header is absent", async () => {
+    const app = new Hono();
+    app.use("/*", corsMiddleware("http://localhost:5173"));
+    app.get("/test", (c) => c.text("ok"));
+
+    const res = await app.request(new Request("http://localhost/test"));
+    expect(res.headers.get("Access-Control-Allow-Origin")).toBeNull();
+  });
+
+  it("handles OPTIONS preflight with 204 and CORS headers", async () => {
+    const app = new Hono();
+    app.use("/*", corsMiddleware("http://localhost:5173"));
+    app.get("/test", (c) => c.text("ok"));
+
+    const res = await app.request(
+      new Request("http://localhost/test", {
+        method: "OPTIONS",
+        headers: {
+          Origin: "http://localhost:5173",
+          "Access-Control-Request-Method": "GET",
+        },
+      }),
+    );
+    expect(res.status).toBeGreaterThanOrEqual(200);
+    expect(res.status).toBeLessThan(300);
+    expect(res.headers.get("Access-Control-Allow-Origin")).toBe("http://localhost:5173");
+  });
+
+  it("OPTIONS preflight without matching origin does not short-circuit", async () => {
+    const app = new Hono();
+    app.use("/*", corsMiddleware("http://localhost:5173"));
+    app.get("/test", (c) => c.text("ok"));
+
+    const res = await app.request(
+      new Request("http://localhost/test", {
+        method: "OPTIONS",
+        headers: { Origin: "http://other.example" },
+      }),
+    );
+    expect(res.headers.get("Access-Control-Allow-Origin")).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CORS integration — createApiApp
+// ---------------------------------------------------------------------------
+
+describe("CORS integration — createApiApp with WORKFLOW_RUNNER_UI_ORIGIN", () => {
+  let savedEnv: string | undefined;
+
+  beforeEach(() => {
+    savedEnv = process.env.WORKFLOW_RUNNER_UI_ORIGIN;
+  });
+
+  afterEach(() => {
+    if (savedEnv === undefined) {
+      delete process.env.WORKFLOW_RUNNER_UI_ORIGIN;
+    } else {
+      process.env.WORKFLOW_RUNNER_UI_ORIGIN = savedEnv;
+    }
+  });
+
+  it("OPTIONS /runs preflight from configured origin returns 2xx with CORS headers", async () => {
+    process.env.WORKFLOW_RUNNER_UI_ORIGIN = "http://localhost:5173";
+    const app = createApiApp(makePartialRm(), DEFAULT_API_PORT);
+    const res = await app.request(
+      new Request(`http://localhost:${DEFAULT_API_PORT}/runs`, {
+        method: "OPTIONS",
+        headers: {
+          Host: `localhost:${DEFAULT_API_PORT}`,
+          Origin: "http://localhost:5173",
+          "Access-Control-Request-Method": "GET",
+        },
+      }),
+    );
+    expect(res.status).toBeGreaterThanOrEqual(200);
+    expect(res.status).toBeLessThan(300);
+    expect(res.headers.get("Access-Control-Allow-Origin")).toBe("http://localhost:5173");
+  });
+
+  it("GET /runs from configured origin includes CORS header", async () => {
+    process.env.WORKFLOW_RUNNER_UI_ORIGIN = "http://localhost:5173";
+    const app = createApiApp(makePartialRm(), DEFAULT_API_PORT);
+    const res = await app.request(
+      new Request(`http://localhost:${DEFAULT_API_PORT}/runs`, {
+        headers: {
+          Host: `localhost:${DEFAULT_API_PORT}`,
+          Origin: "http://localhost:5173",
+        },
+      }),
+    );
+    expect(res.headers.get("Access-Control-Allow-Origin")).toBe("http://localhost:5173");
+  });
+
+  it("CORS header absent when env var is unset", async () => {
+    delete process.env.WORKFLOW_RUNNER_UI_ORIGIN;
+    const app = createApiApp(makePartialRm(), DEFAULT_API_PORT);
+    const res = await app.request(
+      new Request(`http://localhost:${DEFAULT_API_PORT}/runs`, {
+        headers: {
+          Host: `localhost:${DEFAULT_API_PORT}`,
+          Origin: "http://localhost:5173",
+        },
+      }),
+    );
+    expect(res.headers.get("Access-Control-Allow-Origin")).toBeNull();
+  });
+
+  it("WS pre-upgrade: configured origin passes origin check (not 403)", async () => {
+    process.env.WORKFLOW_RUNNER_UI_ORIGIN = "http://localhost:5173";
+    const app = createApiApp(makePartialRm(), DEFAULT_API_PORT);
+    const res = await app.request(
+      new Request(`http://localhost:${DEFAULT_API_PORT}/runs/fake-id/attach`, {
+        headers: {
+          Host: `localhost:${DEFAULT_API_PORT}`,
+          Origin: "http://localhost:5173",
+        },
+      }),
+    );
+    // Origin check passes → run resolution returns 404, not 403
+    expect(res.status).not.toBe(403);
+  });
+
+  it("WS pre-upgrade: non-allowed origin is rejected 403", async () => {
+    process.env.WORKFLOW_RUNNER_UI_ORIGIN = "http://localhost:5173";
+    const app = createApiApp(makePartialRm(), DEFAULT_API_PORT);
+    const res = await app.request(
+      new Request(`http://localhost:${DEFAULT_API_PORT}/runs/fake-id/attach`, {
+        headers: {
+          Host: `localhost:${DEFAULT_API_PORT}`,
+          Origin: "http://evil.example",
+        },
+      }),
+    );
+    expect(res.status).toBe(403);
   });
 });

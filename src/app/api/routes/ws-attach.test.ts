@@ -308,7 +308,7 @@ describe("createPerConnectionState — onOpen frame sequence", () => {
     expect(mock.closeCalls().length).toBe(1);
   });
 
-  it("sends backlog entries from currentStepBacklog when available", async () => {
+  it("sends all backlog entries on initial attach", async () => {
     const entries = [fakeEntry(1), fakeEntry(2), fakeEntry(3)];
     const eventLog = makeEventLogMock(entries);
     const rm = makeRm({ activeEventLog: eventLog });
@@ -321,6 +321,32 @@ describe("createPerConnectionState — onOpen frame sequence", () => {
     expect(backlogFrame?.type).toBe("backlog");
     if (backlogFrame?.type === "backlog") {
       expect(backlogFrame.entries.length).toBe(3);
+    }
+  });
+
+  it("initial attach returns events from all steps, not just the current step", async () => {
+    const step1Events = [fakeEntry(1, "step-1"), fakeEntry(2, "step-1")];
+    const step2Events = [fakeEntry(3, "step-2"), fakeEntry(4, "step-2")];
+    const allEntries = [...step1Events, ...step2Events];
+
+    // currentStepBacklog/readBackwardForCurrentStep would only return step-2 events
+    // (old behaviour). The new path uses readEventsSince(0) via makeEventLogMock.
+    const eventLog = makeEventLogMock(allEntries);
+    const rm = makeRm({ activeEventLog: eventLog, currentStepId: "step-2" });
+
+    const { ws, sentFrames } = makeMockWs();
+    const state = createPerConnectionState(rm, "run001", undefined, () => {});
+    await state.onOpen(ws);
+
+    const backlogFrame = sentFrames().find((f) => f.type === "backlog");
+    expect(backlogFrame?.type).toBe("backlog");
+    if (backlogFrame?.type === "backlog") {
+      const seqs = backlogFrame.entries.map((e) => e.seq);
+      // Must include events from both step-1 AND step-2.
+      expect(seqs).toContain(1);
+      expect(seqs).toContain(2);
+      expect(seqs).toContain(3);
+      expect(seqs).toContain(4);
     }
   });
 
@@ -662,6 +688,34 @@ describe("createPerConnectionState — idle timeout", () => {
     await new Promise((r) => setTimeout(r, 100));
     const closesAfter = mock.closeCalls();
     expect(closesAfter.some(([code]) => code === 1001)).toBe(true);
+  });
+
+  it("resets the idle timer when outbound frames are sent (streaming keeps connection alive)", async () => {
+    let capturedSub: RunSubscriber | null = null;
+    const rm = makeRm({
+      activeEventLog: makeEventLogMock([]),
+      captureSubscriber: (sub) => { capturedSub = sub; },
+    });
+
+    const mock = makeMockWs();
+    const state = createPerConnectionState(rm, "run001", undefined, () => {}, {
+      idleTimeoutMs: 80,
+    });
+
+    await state.onOpen(mock.ws);
+    expect(capturedSub).not.toBeNull();
+
+    // Inject an outbound event just before the timeout fires to reset the timer
+    await new Promise((r) => setTimeout(r, 50));
+    capturedSub!.onEvent(fakeEntry(1));
+
+    // Should still be alive at 80ms (timer was reset at ~50ms by the outbound frame)
+    await new Promise((r) => setTimeout(r, 50));
+    expect(mock.closeCalls().filter(([c]) => c === 1001).length).toBe(0);
+
+    // After another 80ms+ the timer fires (no more outbound frames)
+    await new Promise((r) => setTimeout(r, 100));
+    expect(mock.closeCalls().some(([code]) => code === 1001)).toBe(true);
   });
 });
 

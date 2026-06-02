@@ -1,0 +1,4 @@
+[test]
+# Limit root package test discovery to src/ to avoid picking up
+# the web/ workspace's Vitest-only test files under web/src/
+root = "./src"

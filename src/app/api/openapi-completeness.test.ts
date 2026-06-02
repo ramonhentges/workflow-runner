@@ -131,6 +131,7 @@ describe("GET /openapi.json — V1 endpoint completeness", () => {
       "/runs/:id/stop",
       "/runs/:id/retry-step",
       "/runs/:id/events",
+      "/workflows",
     ];
     for (const p of expectedPaths) {
       expect(paths[p]).toBeDefined();

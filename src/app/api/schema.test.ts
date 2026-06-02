@@ -15,6 +15,8 @@ import {
   EventsPageSchema,
   HealthReportSchema,
   DiscoveryFileSchema,
+  WorkflowListSchema,
+  WorkflowsQuerySchema,
 } from "./schema.js";
 
 // ---------------------------------------------------------------------------
@@ -376,6 +378,62 @@ describe("DiscoveryFileSchema", () => {
   it("rejects missing socket", () => {
     const file = { pid: 1234, apiPort: 4517 };
     expect(DiscoveryFileSchema.safeParse(file).success).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// WorkflowsQuery
+// ---------------------------------------------------------------------------
+
+describe("WorkflowsQuerySchema", () => {
+  it("accepts a cwd string", () => {
+    const result = WorkflowsQuerySchema.safeParse({ cwd: "/home/user/project" });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts empty object (cwd is optional)", () => {
+    const result = WorkflowsQuerySchema.safeParse({});
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.cwd).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// WorkflowList
+// ---------------------------------------------------------------------------
+
+describe("WorkflowListSchema", () => {
+  it("accepts a valid workflow list", () => {
+    const result = WorkflowListSchema.safeParse({
+      workflows: [
+        { name: "who-is.json", path: "/home/user/project/workflows/who-is.json" },
+      ],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts an empty workflows array", () => {
+    const result = WorkflowListSchema.safeParse({ workflows: [] });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects missing workflows field", () => {
+    const result = WorkflowListSchema.safeParse({});
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a workflow item missing name", () => {
+    const result = WorkflowListSchema.safeParse({
+      workflows: [{ path: "/home/user/wf.json" }],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a workflow item missing path", () => {
+    const result = WorkflowListSchema.safeParse({
+      workflows: [{ name: "wf.json" }],
+    });
+    expect(result.success).toBe(false);
   });
 });
 

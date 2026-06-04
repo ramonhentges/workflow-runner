@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { Writable, Readable } from "node:stream";
 import { ClientSideConnection, ndJsonStream } from "@agentclientprotocol/sdk";
 import type {
@@ -9,15 +9,15 @@ import type {
   WriteTextFileResponse,
   ReadTextFileRequest,
   ReadTextFileResponse,
-  NewSessionResponse,
-  SessionConfigSelectOption,
-  SessionConfigSelectGroup,
 } from "@agentclientprotocol/sdk";
 
 import type { Step } from "../../domain/workflow.js";
 import type { StepOutcome } from "../../domain/outcome.js";
 import { asSessionId, type SessionId, type StepToken } from "../../domain/ids.js";
+import type { RunnerAgentSessionFactory } from "../../domain/runner.js";
 import { AcpClient } from "./acp-client.js";
+import type { IdeProfile } from "./ide-profile.js";
+import { resolveIdeProfile } from "./ide-profiles.js";
 
 export interface AgentSessionSink {
   log(message: string, color?: string): void;
@@ -39,10 +39,6 @@ export interface AgentSessionArgs {
   sink: AgentSessionSink;
 }
 
-export interface AgentSessionFactory {
-  create(args: AgentSessionArgs): Promise<AgentSession>;
-}
-
 const MODE_INSTRUCTIONS: Record<Step["mode"], string> = {
   interactive:
     "This is an interactive step — you must ask the user to approve a handoff or finish before completing.",
@@ -61,34 +57,22 @@ export function buildKickoffPrompt(
   return prompt;
 }
 
-/**
- * Extracts the set of valid mode (agent) ids from a `newSession` response.
- *
- * Standard ACP agents advertise modes via the `modes` field, but opencode leaves
- * that unset and instead exposes mode selection as a `configOptions` entry
- * (`id`/`category` of `"mode"`, a `select` whose option `value`s are the agent
- * names). We read the standard field first for forward-compatibility, then fall
- * back to the config option.
- */
-export function availableModeIds(result: NewSessionResponse): string[] {
-  const standard = result.modes?.availableModes?.map((m) => m.id);
-  if (standard && standard.length > 0) return standard;
+type SpawnFn = (
+  cmd: string,
+  spawnArgs: string[],
+  opts: SpawnOptions,
+) => ChildProcess;
 
-  const modeOption = result.configOptions?.find(
-    (o) => o.type === "select" && (o.id === "mode" || o.category === "mode"),
-  );
-  if (!modeOption || modeOption.type !== "select") return [];
+export class IdeDispatchSessionFactory implements RunnerAgentSessionFactory {
+  #spawnFn: SpawnFn;
 
-  return modeOption.options.flatMap((entry) =>
-    "group" in entry
-      ? (entry as SessionConfigSelectGroup).options.map((o) => o.value)
-      : [(entry as SessionConfigSelectOption).value],
-  );
-}
+  constructor(spawnFn: SpawnFn = spawn) {
+    this.#spawnFn = spawnFn;
+  }
 
-export class AcpAgentSessionFactory implements AgentSessionFactory {
   async create(args: AgentSessionArgs): Promise<AgentSession> {
-    return AgentSession.start(args);
+    const profile = resolveIdeProfile(args.step.ide);
+    return AgentSession.start(args, profile, this.#spawnFn);
   }
 }
 
@@ -118,15 +102,19 @@ export class AgentSession {
     this.#sink = init.sink;
   }
 
-  static async start(args: AgentSessionArgs): Promise<AgentSession> {
+  static async start(
+    args: AgentSessionArgs,
+    profile: IdeProfile,
+    spawnFn: SpawnFn = spawn,
+  ): Promise<AgentSession> {
     const { step, cwd, tools, inboundMessage, sink } = args;
     sink.status(`Starting step ${step.id}...`);
 
-    const agentProcess = spawn("opencode", ["acp"], {
+    const agentProcess = spawnFn(profile.spawn.command, profile.spawn.args, {
       stdio: ["pipe", "pipe", "pipe"],
       env: {
         ...globalThis.process.env,
-        OPENCODE_ENABLE_QUESTION_TOOL: "1",
+        ...profile.spawn.env,
       },
     });
 
@@ -144,7 +132,11 @@ export class AgentSession {
 
     await new Promise<void>((resolve, reject) => {
       agentProcess.once("error", (err) => {
-        reject(new Error(`Failed to spawn opencode agent: ${String(err)}`));
+        reject(
+          new Error(
+            `Failed to spawn agent '${profile.spawn.command}': ${String(err)}`,
+          ),
+        );
       });
       agentProcess.once("spawn", resolve);
     });
@@ -263,34 +255,13 @@ export class AgentSession {
       const sessionId = asSessionId(sessionResult.sessionId);
       sink.log(`Session created: ${sessionId}`);
 
-      
-      const modeIds = availableModeIds(sessionResult);
-      if (modeIds.length > 0 && !modeIds.includes(step.agent)) {
-        throw new Error(
-          `Step '${step.id}': agent '${step.agent}' is not a valid mode (available: ${modeIds.join(", ")})`,
-        );
-      }
-
-      try {
-        await connection.setSessionMode({ sessionId, modeId: step.agent });
-      } catch (err) {
-        throw new Error(
-          `Step '${step.id}': failed to set agent '${step.agent}': ${err}`,
-        );
-      }
-      sink.log(`Mode set: ${step.agent}`);
-
-      try {
-        await connection.unstable_setSessionModel({
-          sessionId,
-          modelId: step.model,
-        });
-        sink.log(`Model set: ${step.model}`);
-      } catch (err) {
-        throw new Error(
-          `Step '${step.id}': failed to set model '${step.model}': ${err}`,
-        );
-      }
+      await profile.configureSession({
+        connection,
+        sessionId,
+        session: sessionResult,
+        step,
+        log: (msg, color) => sink.log(msg, color),
+      });
 
       const kickoffPrompt = buildKickoffPrompt(step, inboundMessage);
       sink.log(`Kickoff: ${step.description}`);

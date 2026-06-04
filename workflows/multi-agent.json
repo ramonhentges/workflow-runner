@@ -1,0 +1,59 @@
+{
+  "id": "multi-agent-demo",
+  "name": "Multi-Agent Demo",
+  "description": "Four-step workflow spanning all four supported agents with cross-agent handoffs: claude-code → opencode → codex → gemini",
+  "steps": [
+    {
+      "id": "plan",
+      "agent": "architect-advisor",
+      "description": "Analyze the task and write a structured plan to ./plan.md. When the plan is complete, call the handoff tool to route to the implementation step.",
+      "mode": "interactive",
+      "ide": "claude-code",
+      "model": "claude-sonnet-4-6",
+      "edges": [
+        {
+          "next_step": "implement",
+          "intent": "Hand off to the opencode implementation step once the plan is written and approved"
+        }
+      ]
+    },
+    {
+      "id": "implement",
+      "agent": "pragmatic-engineer/AGENT",
+      "description": "Read ./plan.md and implement the described solution. Write results to ./output.md. Call handoff to route to code review when done.",
+      "mode": "autonomous",
+      "ide": "opencode",
+      "model": "opencode/big-pickle",
+      "edges": [
+        {
+          "next_step": "review",
+          "intent": "Hand off to the codex review step once implementation is complete"
+        }
+      ]
+    },
+    {
+      "id": "review",
+      "agent": "default",
+      "description": "Review ./output.md for correctness and completeness. Append review notes to ./review.md. Call handoff to route to the summary step when done.",
+      "mode": "autonomous",
+      "ide": "codex",
+      "model": "gpt-5.4-mini",
+      "edges": [
+        {
+          "next_step": "summarize",
+          "intent": "Hand off to the gemini summary step once the review is written"
+        }
+      ]
+    },
+    {
+      "id": "summarize",
+      "agent": "default",
+      "description": "Read ./plan.md, ./output.md, and ./review.md. Write a concise final summary to ./summary.md. Call finish when done.",
+      "mode": "autonomous",
+      "ide": "gemini",
+      "model": "gemini-2.5-pro",
+      "edges": []
+    }
+  ],
+  "version": "1"
+}

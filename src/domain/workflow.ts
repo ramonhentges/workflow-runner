@@ -149,6 +149,10 @@ function validateStep(rawStep: unknown, existingIds: Set<StepId>): Step {
     throw new WorkflowConfigError(`Step '${s.id}': missing or empty 'model'`);
   }
 
+  if (typeof s.ide !== "string" || s.ide.trim() === "") {
+    throw new WorkflowConfigError(`Step '${s.id}': missing or empty 'ide'`);
+  }
+
   if (s.mode !== "interactive" && s.mode !== "autonomous") {
     throw new WorkflowConfigError(
       `Step '${s.id}': 'mode' must be 'interactive' or 'autonomous', got '${String(s.mode)}'`,
@@ -160,7 +164,7 @@ function validateStep(rawStep: unknown, existingIds: Set<StepId>): Step {
     agent: s.agent,
     description: typeof s.description === "string" ? s.description : "",
     mode: s.mode,
-    ide: typeof s.ide === "string" ? s.ide : "",
+    ide: s.ide,
     model: s.model,
     edges: [],
   };

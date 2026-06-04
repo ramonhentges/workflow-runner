@@ -74,6 +74,22 @@ describe("Workflow.load", () => {
       expect(workflow.hasStep(workflow.steps[1].id)).toBe(true);
       expect(workflow.getStep(workflow.steps[2].id)?.id).toBe("step-3");
     });
+
+    it("sets Step.ide to the provided value when ide is 'opencode'", async () => {
+      const step = { ...VALID_CONFIG.steps[1], ide: "opencode" };
+      const config = { ...VALID_CONFIG, steps: [step] };
+      const path = await writeTempFile(JSON.stringify(config));
+      const workflow = await Workflow.load(path);
+      expect(workflow.steps[0].ide).toBe("opencode");
+    });
+
+    it("accepts an arbitrary non-empty ide without membership check", async () => {
+      const step = { ...VALID_CONFIG.steps[1], ide: "made-up" };
+      const config = { ...VALID_CONFIG, steps: [step] };
+      const path = await writeTempFile(JSON.stringify(config));
+      const workflow = await Workflow.load(path);
+      expect(workflow.steps[0].ide).toBe("made-up");
+    });
   });
 
   describe("rejection cases", () => {
@@ -193,6 +209,55 @@ describe("Workflow.load", () => {
       expect((err as WorkflowConfigError).message).toContain("model");
     });
 
+    it("throws WorkflowConfigError when step is missing 'ide'", async () => {
+      const { ide: _i, ...stepNoIde } = VALID_CONFIG.steps[0];
+      const badConfig = { ...VALID_CONFIG, steps: [stepNoIde] };
+      const path = await writeTempFile(JSON.stringify(badConfig));
+      let err: unknown;
+      try {
+        await Workflow.load(path);
+      } catch (e) {
+        err = e;
+      }
+      expect(err).toBeInstanceOf(WorkflowConfigError);
+      expect((err as WorkflowConfigError).message).toContain("step-1");
+      expect((err as WorkflowConfigError).message).toContain("ide");
+    });
+
+    it("throws WorkflowConfigError when step has ide: '' (empty string)", async () => {
+      const badConfig = {
+        ...VALID_CONFIG,
+        steps: [{ ...VALID_CONFIG.steps[0], ide: "" }],
+      };
+      const path = await writeTempFile(JSON.stringify(badConfig));
+      let err: unknown;
+      try {
+        await Workflow.load(path);
+      } catch (e) {
+        err = e;
+      }
+      expect(err).toBeInstanceOf(WorkflowConfigError);
+      expect((err as WorkflowConfigError).message).toContain("step-1");
+      expect((err as WorkflowConfigError).message).toContain("ide");
+    });
+
+    it("throws WorkflowConfigError when step has ide of only whitespace", async () => {
+      const badConfig = {
+        ...VALID_CONFIG,
+        steps: [{ ...VALID_CONFIG.steps[0], ide: "   " }],
+      };
+      const path = await writeTempFile(JSON.stringify(badConfig));
+      let err: unknown;
+      try {
+        await Workflow.load(path);
+      } catch (e) {
+        err = e;
+      }
+      expect(err).toBeInstanceOf(WorkflowConfigError);
+      expect((err as WorkflowConfigError).message).toContain("step-1");
+      expect((err as WorkflowConfigError).message).toContain("ide");
+    });
+
     it("throws WorkflowConfigError for a non-object workflow (e.g. JSON array)", async () => {
       const path = await writeTempFile("[]");
       let err: unknown;
@@ -216,6 +281,37 @@ describe("Workflow.load", () => {
   });
 
   describe("integration test", () => {
+    it("loads workflows/who-is.json and every step has a non-empty ide", async () => {
+      const workflow = await Workflow.load("workflows/who-is.json");
+      for (const step of workflow.steps) {
+        expect(step.ide.trim().length).toBeGreaterThan(0);
+      }
+    });
+
+    it("loads workflows/multi-agent.json and every step has a supported ide value", async () => {
+      const SUPPORTED_IDES = new Set(["opencode", "claude-code", "codex", "gemini"]);
+      const workflow = await Workflow.load("workflows/multi-agent.json");
+      for (const step of workflow.steps) {
+        expect(SUPPORTED_IDES.has(step.ide)).toBe(true);
+      }
+    });
+
+    it("loads workflows/multi-agent.json with at least two distinct ide values", async () => {
+      const workflow = await Workflow.load("workflows/multi-agent.json");
+      const ides = new Set(workflow.steps.map((s) => s.ide));
+      expect(ides.size).toBeGreaterThanOrEqual(2);
+    });
+
+    it("loads workflows/multi-agent.json and all cross-agent handoff edges reference valid step ids", async () => {
+      const workflow = await Workflow.load("workflows/multi-agent.json");
+      const stepIds = new Set(workflow.steps.map((s) => s.id));
+      for (const step of workflow.steps) {
+        for (const edge of step.edges) {
+          expect(stepIds.has(edge.next_step)).toBe(true);
+        }
+      }
+    });
+
     it("loads workflows/who-is.json and deep-equals the on-disk config", async () => {
       const raw = await readFile("workflows/who-is.json", "utf-8");
       const onDisk = JSON.parse(raw) as {

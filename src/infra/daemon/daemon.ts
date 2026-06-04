@@ -14,7 +14,7 @@ import { join } from "node:path";
 import type { Socket, UnixSocketListener } from "bun";
 
 import type { RunnerAgentSessionFactory } from "../../domain/runner.js";
-import { AcpAgentSessionFactory } from "../acp/agent-session.js";
+import { IdeDispatchSessionFactory } from "../acp/agent-session.js";
 import { createApiApp } from "../../app/api/app.js";
 import { websocket, createWsConnectionRegistry } from "../../app/api/routes/ws-attach.js";
 import { DEFAULT_API_PORT } from "../../app/api/security.js";
@@ -584,7 +584,7 @@ async function resolveSessionFactory(): Promise<RunnerAgentSessionFactory> {
     const mod = await import("./test-helpers/fixture-session-factory.js");
     return new mod.FixtureSessionFactory();
   }
-  return new AcpAgentSessionFactory();
+  return new IdeDispatchSessionFactory();
 }
 
 /** Returns the size of the live daemon log file, or 0 if missing. */

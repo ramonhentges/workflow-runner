@@ -52,6 +52,39 @@ Detach from an attached TUI with the `/detach` slash command inside the TUI; Ctr
 
 Global flags: `--help`/`-h`, `--version`.
 
+## Web Interface
+
+The daemon also hosts a web UI at `http://127.0.0.1:<port>` (default **4517**; read `daemon.json` for the live port). The sidebar provides a **Workflows** link alongside the run dashboard.
+
+### Workflow Management
+
+Workflow authoring (create, edit, delete) is available exclusively in the web UI — there is no CLI command for these operations. The web pages are:
+
+| Page | URL path | Purpose |
+|------|----------|---------|
+| List | `/workflows` | All `*.json` files in `<cwd>/workflows`. Edit or delete each entry. |
+| Create | `/workflows/new` | Form-based workflow editor. Supports `?from=<name>` to pre-fill from an existing workflow. |
+| Edit | `/workflows/$name/edit` | Edit an existing workflow by bare name. |
+
+**Bare-name addressing:** workflow names in URLs omit the `.json` extension — the server appends it. The list page returns filenames with the extension; the web client strips it when building edit and delete links.
+
+**Server-side validation:** every create and update passes the posted `workflow` through `Workflow.fromJson`. Structurally invalid workflows are rejected with `400 WORKFLOW_INVALID`. Authors cannot save an incomplete draft through the API.
+
+### Agent and Model Discovery
+
+When editing a step, selecting an IDE triggers a live catalog probe (`GET /ide/{ide}/catalog?cwd=`). The probe spawns the IDE subprocess over ACP, reads its available agents and models from one `newSession` response, then exits. The step editor's agent and model pickers are populated from the result.
+
+If the IDE is unreachable (not installed, not authenticated, or the probe times out), the response is a normal `200` with `reachable: false` — the picker falls back to free-text entry. Discovery is best-effort and never blocks saving a workflow.
+
+Discovery requires the IDE to be installed and authenticated locally (same prerequisites as running a step; see the table under [Prerequisites](#prerequisites)). Supported `ide` values: `opencode`, `claude-code`, `codex`, `gemini`.
+
+### Delete Behavior
+
+- **Active run present:** the delete is refused with `409 WORKFLOW_RUN_ACTIVE`. Stop the active run first.
+- **No active run:** a standard confirmation is shown, then the file is removed. Finished-run history is not affected and does not gate cleanup.
+
+The same active-run guard applies to rename operations (a `PUT` that supplies a new name). An in-place update (no rename) does not trigger the guard.
+
 ## Manual E2E Testing Procedure
 
 Integration test procedure for the workflow runner using the `workflows/who-is.json` fixture.
@@ -241,6 +274,12 @@ overridable with `--api-port` or `WORKFLOW_RUNNER_API_PORT`. The live port is al
 | POST   | `/runs`                | Start a run. Body: `{ "workflowPath": "...", "cwd": "..." }` (both required).    |
 | POST   | `/runs/:id/stop`       | Stop a run gracefully then forcefully.                                           |
 | POST   | `/runs/:id/retry-step` | Retry the failing step of a crashed/failed/aborted run.                          |
+| GET    | `/workflows?cwd=`      | List `*.json` workflow files in `<cwd>/workflows`.                               |
+| GET    | `/workflows/:name?cwd=` | Read one workflow by bare name (`.json` appended by the server). 404 if not found. |
+| POST   | `/workflows?cwd=`      | Create a workflow; body `{ name, workflow }`. Server-validates structure. 409 if name exists. |
+| PUT    | `/workflows/:name?cwd=` | Update or rename; body `{ workflow, name? }`. 409 if a run is active (rename) or target exists. |
+| DELETE | `/workflows/:name?cwd=` | Delete a workflow. 409 `WORKFLOW_RUN_ACTIVE` if a run is active.               |
+| GET    | `/ide/:ide/catalog?cwd=` | Probe `ide` for available agents and models. Always 200; `reachable: false` if unreachable. 400 for unknown `ide`. |
 | GET    | `/openapi.json`        | OpenAPI 3.0 document describing all endpoints.                                   |
 
 ### WebSocket Endpoint

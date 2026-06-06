@@ -91,6 +91,27 @@ A port interface is only needed when it has two or more implementations. When a 
 - `edges` constrain which `next_step` values are valid for `handoff`; a step with no edges cannot call `handoff`.
 - A single workflow may freely mix IDEs across steps, including cross-IDE handoffs (e.g. a `claude-code` step hands off to an `opencode` step).
 
+## Workflow management API
+
+Workflow authoring (create, edit, delete) is available in the **web UI only** — there is no CLI command for these operations. The daemon exposes the following endpoints for workflow CRUD and IDE catalog discovery:
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/workflows?cwd=` | List `*.json` files in `<cwd>/workflows` (existing; unchanged). |
+| GET | `/workflows/:name?cwd=` | Read one by bare name (`.json` appended by the server). |
+| POST | `/workflows?cwd=` | Create; body `{ name, workflow }`. Server-validates with `Workflow.fromJson`. 409 if name exists. |
+| PUT | `/workflows/:name?cwd=` | Update or rename; body `{ workflow, name? }`. 409 if a run is active (rename only) or rename target exists. |
+| DELETE | `/workflows/:name?cwd=` | Delete (run-aware). 409 `WORKFLOW_RUN_ACTIVE` if a run is active. |
+| GET | `/ide/:ide/catalog?cwd=` | Probe IDE for available agents and models. Always 200; `reachable: false` if unreachable. 400 for unknown `ide`. |
+
+**Bare-name addressing:** `{name}` in the URL is the bare workflow name without extension; the server appends `.json`. Two name forms coexist: the list endpoint returns `who-is.json`; CRUD routes use `who-is`. The web client strips the extension from list filenames before constructing edit/delete URLs.
+
+**Server-side validation:** `POST` and `PUT` bodies are validated by `Workflow.fromJson`; a `WorkflowConfigError` maps to `400 WORKFLOW_INVALID`. The server is the source of truth; the web editor mirrors validation locally for instant feedback only.
+
+**Run-aware guard:** `DELETE` and rename (`PUT` with a new name) return `409 WORKFLOW_RUN_ACTIVE` when a run referencing that workflow file is in the `running` state. An in-place `PUT` (no rename) does not trigger the guard.
+
+**IDE catalog:** `GET /ide/{ide}/catalog?cwd=` spawns the IDE subprocess over ACP, reads agents and models from one `newSession` response, then exits. Supported `ide` values match the run-time registry: `opencode`, `claude-code`, `codex`, `gemini`. Discovery requires the IDE to be installed and authenticated locally.
+
 ## End-to-end testing
 
 The manual E2E procedure is documented in `README.md`. Fixture workflows:

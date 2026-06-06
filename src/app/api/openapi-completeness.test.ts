@@ -117,7 +117,7 @@ describe("GET /openapi.json — V1 endpoint completeness", () => {
     expect(json.openapi).toBe("3.0.0");
   });
 
-  it("lists every V1 HTTP path (health, runs, runs/:id, start, stop, retry-step, events)", async () => {
+  it("lists every V1 HTTP path (health, runs, runs/:id, start, stop, retry-step, events, workflows CRUD, IDE catalog)", async () => {
     const app = createApiApp(makePartialRm());
     const res = await app.request("/openapi.json");
     const json = (await res.json()) as { paths: Record<string, unknown> };
@@ -132,10 +132,58 @@ describe("GET /openapi.json — V1 endpoint completeness", () => {
       "/runs/:id/retry-step",
       "/runs/:id/events",
       "/workflows",
+      "/workflows/:name",
+      "/ide/:ide/catalog",
     ];
     for (const p of expectedPaths) {
       expect(paths[p]).toBeDefined();
     }
+  });
+
+  it("GET /workflows/:name has a 200 response (read-one)", async () => {
+    const app = createApiApp(makePartialRm());
+    const res = await app.request("/openapi.json");
+    const json = (await res.json()) as {
+      paths: Record<string, { get?: { responses?: Record<string, unknown> } }>;
+    };
+    expect(json.paths["/workflows/:name"]?.get?.responses?.["200"]).toBeDefined();
+  });
+
+  it("POST /workflows has a 201 response (create workflow)", async () => {
+    const app = createApiApp(makePartialRm());
+    const res = await app.request("/openapi.json");
+    const json = (await res.json()) as {
+      paths: Record<string, { post?: { responses?: Record<string, unknown> } }>;
+    };
+    expect(json.paths["/workflows"]?.post?.responses?.["201"]).toBeDefined();
+  });
+
+  it("PUT /workflows/:name has a 200 response (update workflow)", async () => {
+    const app = createApiApp(makePartialRm());
+    const res = await app.request("/openapi.json");
+    const json = (await res.json()) as {
+      paths: Record<string, { put?: { responses?: Record<string, unknown> } }>;
+    };
+    expect(json.paths["/workflows/:name"]?.put?.responses?.["200"]).toBeDefined();
+  });
+
+  it("DELETE /workflows/:name has a 200 response (delete workflow)", async () => {
+    const app = createApiApp(makePartialRm());
+    const res = await app.request("/openapi.json");
+    const json = (await res.json()) as {
+      paths: Record<string, { delete?: { responses?: Record<string, unknown> } }>;
+    };
+    expect(json.paths["/workflows/:name"]?.delete?.responses?.["200"]).toBeDefined();
+  });
+
+  it("GET /ide/:ide/catalog has 200 and 400 responses", async () => {
+    const app = createApiApp(makePartialRm());
+    const res = await app.request("/openapi.json");
+    const json = (await res.json()) as {
+      paths: Record<string, { get?: { responses?: Record<string, unknown> } }>;
+    };
+    expect(json.paths["/ide/:ide/catalog"]?.get?.responses?.["200"]).toBeDefined();
+    expect(json.paths["/ide/:ide/catalog"]?.get?.responses?.["400"]).toBeDefined();
   });
 
   it("GET /health path has a 200 response", async () => {

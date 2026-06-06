@@ -78,6 +78,8 @@ export const RpcErrorCode = {
   RUN_LIMIT_REACHED: -32005,
   DAEMON_SHUTTING_DOWN: -32006,
   CWD_INVALID: -32007,
+  WORKFLOW_RUN_ACTIVE: -32008,
+  WORKFLOW_EXISTS: -32009,
 } as const;
 
 export type RpcErrorName = keyof typeof RpcErrorCode;

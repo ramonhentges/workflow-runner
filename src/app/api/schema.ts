@@ -121,3 +121,56 @@ export const WorkflowListSchema = z.object({
   workflows: z.array(WorkflowItemSchema),
 });
 export type WorkflowList = z.infer<typeof WorkflowListSchema>;
+
+// Bare workflow name path param: no /, \, or .. sequences.
+export const WorkflowNameParamSchema = z
+  .string()
+  .min(1)
+  .refine(
+    (v) => !v.includes("/") && !v.includes("\\") && !v.includes(".."),
+    { message: "workflow name must be a safe bare filename" },
+  );
+export type WorkflowNameParam = z.infer<typeof WorkflowNameParamSchema>;
+
+// POST /workflows body: { name, workflow }.
+// workflow is z.unknown() — domain layer validates structure via Workflow.fromJson.
+export const WorkflowCreateBodySchema = z.object({
+  name: WorkflowNameParamSchema,
+  workflow: z.unknown(),
+});
+export type WorkflowCreateBody = z.infer<typeof WorkflowCreateBodySchema>;
+
+// PUT /workflows/:name body: { name?, workflow }.
+export const WorkflowUpdateBodySchema = z.object({
+  name: WorkflowNameParamSchema.optional(),
+  workflow: z.unknown(),
+});
+export type WorkflowUpdateBody = z.infer<typeof WorkflowUpdateBodySchema>;
+
+// GET /workflows/:name response.
+export const WorkflowDocSchema = z.object({
+  name: z.string(),
+  path: z.string(),
+  workflow: z.unknown(),
+});
+export type WorkflowDoc = z.infer<typeof WorkflowDocSchema>;
+
+// GET /ide/:ide/catalog path param.
+export const IdeCatalogParamSchema = z.object({
+  ide: z.string().min(1),
+});
+export type IdeCatalogParam = z.infer<typeof IdeCatalogParamSchema>;
+
+const IdeCatalogEntrySchema = z.object({
+  id: z.string(),
+  name: z.string(),
+});
+
+// GET /ide/:ide/catalog response.
+export const IdeCatalogSchema = z.object({
+  reachable: z.boolean(),
+  agents: z.array(IdeCatalogEntrySchema),
+  models: z.array(IdeCatalogEntrySchema),
+  reason: z.string().optional(),
+});
+export type IdeCatalog = z.infer<typeof IdeCatalogSchema>;

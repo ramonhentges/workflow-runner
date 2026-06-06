@@ -9,9 +9,15 @@ import { registerRetryStepRoute } from "./routes/retry-step.js";
 import { registerRunEventsRoute } from "./routes/run-events.js";
 import { registerWsAttachRoute, type WsConnectionRegistry } from "./routes/ws-attach.js";
 import { registerWorkflowsRoute } from "./routes/workflows.js";
+import { registerWorkflowCrudRoutes } from "./routes/workflow-crud.js";
+import { registerIdeCatalogRoute, type IdeCatalogProbe } from "./routes/ide-catalog.js";
 import { hostAllowlistMiddleware, corsMiddleware } from "./security.js";
 
 export type ApiApp = OpenAPIHono;
+
+export interface ApiAppOptions {
+  ideCatalogProbe?: IdeCatalogProbe;
+}
 
 /**
  * Creates the Hono OpenAPI app harness.
@@ -31,6 +37,7 @@ export function createApiApp(
   runManager: RunManager,
   port?: number,
   wsRegistry?: WsConnectionRegistry,
+  options: ApiAppOptions = {},
 ): ApiApp {
   const app = new OpenAPIHono();
 
@@ -59,6 +66,8 @@ export function createApiApp(
   registerRetryStepRoute(app, runManager);
   registerRunEventsRoute(app, runManager);
   registerWorkflowsRoute(app);
+  registerWorkflowCrudRoutes(app, runManager);
+  registerIdeCatalogRoute(app, options.ideCatalogProbe);
   registerWsAttachRoute(app, runManager, port, wsRegistry);
 
   return app;

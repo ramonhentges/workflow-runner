@@ -46,6 +46,13 @@ export function AppShell() {
           >
             Start Run
           </Link>
+          <Link
+            to="/workflows"
+            className="px-3 py-2 rounded text-sm hover:bg-accent hover:text-accent-foreground transition-colors"
+            activeProps={{ className: 'bg-accent font-medium text-accent-foreground' }}
+          >
+            Workflows
+          </Link>
         </nav>
         <div className="flex-1 overflow-y-auto border-t">
           <CwdSwitcher />

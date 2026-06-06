@@ -4,6 +4,11 @@ import type {
   RunSummary,
   RunDetail,
   WorkflowList,
+  WorkflowDoc,
+  WorkflowCreateBody,
+  WorkflowUpdateBody,
+  WorkflowDeleteResult,
+  IdeCatalog,
   HealthReport,
   StartRunRequest,
 } from './types'
@@ -76,6 +81,37 @@ export async function getRun(id: string): Promise<RunDetail> {
 
 export async function listWorkflows(cwd: string): Promise<WorkflowList> {
   return apiFetch<WorkflowList>('/workflows', { params: { cwd } })
+}
+
+export async function getWorkflow(cwd: string, name: string): Promise<WorkflowDoc> {
+  return apiFetch<WorkflowDoc>(`/workflows/${encodeURIComponent(name)}`, { params: { cwd } })
+}
+
+export async function createWorkflow(cwd: string, body: WorkflowCreateBody): Promise<WorkflowDoc> {
+  return apiFetch<WorkflowDoc>('/workflows', { method: 'POST', params: { cwd }, body })
+}
+
+export async function updateWorkflow(
+  cwd: string,
+  name: string,
+  body: WorkflowUpdateBody,
+): Promise<WorkflowDoc> {
+  return apiFetch<WorkflowDoc>(`/workflows/${encodeURIComponent(name)}`, {
+    method: 'PUT',
+    params: { cwd },
+    body,
+  })
+}
+
+export async function deleteWorkflow(cwd: string, name: string): Promise<WorkflowDeleteResult> {
+  return apiFetch<WorkflowDeleteResult>(`/workflows/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+    params: { cwd },
+  })
+}
+
+export async function getIdeCatalog(cwd: string, ide: string): Promise<IdeCatalog> {
+  return apiFetch<IdeCatalog>(`/ide/${encodeURIComponent(ide)}/catalog`, { params: { cwd } })
 }
 
 export async function getHealth(): Promise<HealthReport> {

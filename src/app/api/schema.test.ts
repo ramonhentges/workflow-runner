@@ -17,6 +17,11 @@ import {
   DiscoveryFileSchema,
   WorkflowListSchema,
   WorkflowsQuerySchema,
+  WorkflowNameParamSchema,
+  WorkflowCreateBodySchema,
+  WorkflowUpdateBodySchema,
+  WorkflowDocSchema,
+  IdeCatalogSchema,
 } from "./schema.js";
 
 // ---------------------------------------------------------------------------
@@ -434,6 +439,159 @@ describe("WorkflowListSchema", () => {
       workflows: [{ name: "wf.json" }],
     });
     expect(result.success).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// WorkflowNameParam
+// ---------------------------------------------------------------------------
+
+describe("WorkflowNameParamSchema", () => {
+  it("accepts a valid bare name", () => {
+    expect(WorkflowNameParamSchema.safeParse("who-is").success).toBe(true);
+  });
+
+  it("rejects a name containing a forward slash", () => {
+    expect(WorkflowNameParamSchema.safeParse("a/b").success).toBe(false);
+  });
+
+  it("rejects a name containing a backslash", () => {
+    expect(WorkflowNameParamSchema.safeParse("x\\y").success).toBe(false);
+  });
+
+  it("rejects a path-traversal sequence (../escape)", () => {
+    expect(WorkflowNameParamSchema.safeParse("../escape").success).toBe(false);
+  });
+
+  it("rejects a bare .. name", () => {
+    expect(WorkflowNameParamSchema.safeParse("..").success).toBe(false);
+  });
+
+  it("rejects an empty string", () => {
+    expect(WorkflowNameParamSchema.safeParse("").success).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// WorkflowCreateBody
+// ---------------------------------------------------------------------------
+
+describe("WorkflowCreateBodySchema", () => {
+  it("accepts a valid create body", () => {
+    const body = { name: "my-workflow", workflow: { id: "wf", steps: [] } };
+    expect(WorkflowCreateBodySchema.safeParse(body).success).toBe(true);
+  });
+
+  it("rejects a body missing name", () => {
+    const body = { workflow: { id: "wf" } };
+    expect(WorkflowCreateBodySchema.safeParse(body).success).toBe(false);
+  });
+
+  it("rejects a body missing workflow", () => {
+    const body = { name: "my-workflow" };
+    expect(WorkflowCreateBodySchema.safeParse(body).success).toBe(false);
+  });
+
+  it("rejects an invalid name (contains /)", () => {
+    const body = { name: "bad/name", workflow: {} };
+    expect(WorkflowCreateBodySchema.safeParse(body).success).toBe(false);
+  });
+
+  it("accepts workflow as any shape (z.unknown)", () => {
+    const body = { name: "my-workflow", workflow: null };
+    expect(WorkflowCreateBodySchema.safeParse(body).success).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// WorkflowUpdateBody
+// ---------------------------------------------------------------------------
+
+describe("WorkflowUpdateBodySchema", () => {
+  it("accepts a body with workflow and no name (rename omitted)", () => {
+    const body = { workflow: { id: "wf", steps: [] } };
+    expect(WorkflowUpdateBodySchema.safeParse(body).success).toBe(true);
+  });
+
+  it("accepts a body with both name and workflow", () => {
+    const body = { name: "new-name", workflow: { id: "wf" } };
+    expect(WorkflowUpdateBodySchema.safeParse(body).success).toBe(true);
+  });
+
+  it("rejects a body missing workflow", () => {
+    const body = { name: "new-name" };
+    expect(WorkflowUpdateBodySchema.safeParse(body).success).toBe(false);
+  });
+
+  it("rejects an invalid name when provided", () => {
+    const body = { name: "bad/name", workflow: {} };
+    expect(WorkflowUpdateBodySchema.safeParse(body).success).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// WorkflowDoc (read-one response)
+// ---------------------------------------------------------------------------
+
+describe("WorkflowDocSchema", () => {
+  it("round-trips a representative read-one response", () => {
+    const doc = {
+      name: "who-is",
+      path: "/home/user/project/workflows/who-is.json",
+      workflow: { id: "who-is", name: "Who Is?", steps: [] },
+    };
+    const result = WorkflowDocSchema.safeParse(doc);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.name).toBe("who-is");
+      expect(result.data.path).toBe("/home/user/project/workflows/who-is.json");
+      expect(result.data.workflow).toEqual(doc.workflow);
+    }
+  });
+
+  it("rejects a doc missing name", () => {
+    const doc = { path: "/wf.json", workflow: {} };
+    expect(WorkflowDocSchema.safeParse(doc).success).toBe(false);
+  });
+
+  it("rejects a doc missing path", () => {
+    const doc = { name: "wf", workflow: {} };
+    expect(WorkflowDocSchema.safeParse(doc).success).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// IdeCatalog
+// ---------------------------------------------------------------------------
+
+describe("IdeCatalogSchema", () => {
+  it("parses an unreachable catalog response", () => {
+    const catalog = { reachable: false, agents: [], models: [], reason: "x" };
+    const result = IdeCatalogSchema.safeParse(catalog);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.reachable).toBe(false);
+      expect(result.data.reason).toBe("x");
+    }
+  });
+
+  it("parses a reachable catalog with agents and models", () => {
+    const catalog = {
+      reachable: true,
+      agents: [{ id: "architect-advisor", name: "Architect Advisor" }],
+      models: [{ id: "big-pickle", name: "Big Pickle" }],
+    };
+    expect(IdeCatalogSchema.safeParse(catalog).success).toBe(true);
+  });
+
+  it("accepts a catalog without reason (optional)", () => {
+    const catalog = { reachable: true, agents: [], models: [] };
+    expect(IdeCatalogSchema.safeParse(catalog).success).toBe(true);
+  });
+
+  it("rejects a catalog missing reachable", () => {
+    const catalog = { agents: [], models: [] };
+    expect(IdeCatalogSchema.safeParse(catalog).success).toBe(false);
   });
 });
 

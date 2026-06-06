@@ -112,6 +112,11 @@ describe('route rendering', () => {
     expect(await screen.findByTestId('no-cwd-prompt')).toBeInTheDocument()
   })
 
+  test('/workflows renders WorkflowList', async () => {
+    renderApp('/workflows')
+    expect(await screen.findByTestId('no-cwd-prompt')).toBeInTheDocument()
+  })
+
   test('unknown path renders not-found state', async () => {
     renderApp('/this-does-not-exist-at-all')
     expect(await screen.findByTestId('not-found')).toBeInTheDocument()
@@ -151,6 +156,12 @@ describe('app shell persistence', () => {
 
   test('cwd switcher is visible on the start-run route', async () => {
     renderApp('/start')
+    await screen.findByTestId('app-shell')
+    expect(screen.getByTestId('cwd-empty-state')).toBeInTheDocument()
+  })
+
+  test('cwd switcher is visible on the workflows route', async () => {
+    renderApp('/workflows')
     await screen.findByTestId('app-shell')
     expect(screen.getByTestId('cwd-empty-state')).toBeInTheDocument()
   })

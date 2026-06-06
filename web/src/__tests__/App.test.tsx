@@ -27,5 +27,6 @@ describe('App', () => {
     renderApp('/')
     expect(await screen.findByRole('link', { name: 'Dashboard' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Start Run' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Workflows' })).toBeInTheDocument()
   })
 })

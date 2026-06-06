@@ -69,6 +69,38 @@ export interface WorkflowList {
   workflows: WorkflowItem[]
 }
 
+export interface WorkflowDoc {
+  name: string
+  path: string
+  workflow: unknown
+}
+
+export interface WorkflowCreateBody {
+  name: string
+  workflow: unknown
+}
+
+export interface WorkflowUpdateBody {
+  name?: string
+  workflow: unknown
+}
+
+export interface WorkflowDeleteResult {
+  deleted: string
+}
+
+export interface IdeCatalogEntry {
+  id: string
+  name: string
+}
+
+export interface IdeCatalog {
+  reachable: boolean
+  agents: IdeCatalogEntry[]
+  models: IdeCatalogEntry[]
+  reason?: string
+}
+
 export interface HealthReport {
   status: 'ok'
   pid: number

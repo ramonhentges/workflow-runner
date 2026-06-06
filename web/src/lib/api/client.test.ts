@@ -5,6 +5,11 @@ import {
   listRuns,
   getRun,
   listWorkflows,
+  getWorkflow,
+  createWorkflow,
+  updateWorkflow,
+  deleteWorkflow,
+  getIdeCatalog,
   getHealth,
   startRun,
   stopRun,
@@ -15,7 +20,7 @@ import {
   RunEventSchema,
   RunStatusSchema,
 } from './client'
-import type { RunSummary, RunDetail, WorkflowItem } from './types'
+import type { IdeCatalog, RunSummary, RunDetail, WorkflowDoc, WorkflowItem } from './types'
 
 const BASE = 'http://127.0.0.1:4517'
 
@@ -44,6 +49,30 @@ function makeRunDetail(overrides: Partial<RunDetail> = {}): RunDetail {
     startedAt: 1000,
     endedAt: null,
     attachedCount: 0,
+    ...overrides,
+  }
+}
+
+function makeWorkflowDoc(overrides: Partial<WorkflowDoc> = {}): WorkflowDoc {
+  const name = overrides.name ?? 'who-is'
+  return {
+    name,
+    path: `/tmp/test/workflows/${name}.json`,
+    workflow: {
+      id: name,
+      name: 'Who Is',
+      steps: [
+        {
+          id: 'step-1',
+          ide: 'opencode',
+          agent: 'general',
+          model: 'opencode/default',
+          mode: 'autonomous',
+          description: 'Identify the subject',
+          edges: [],
+        },
+      ],
+    },
     ...overrides,
   }
 }
@@ -249,6 +278,189 @@ describe('listWorkflows (integration)', () => {
 
     expect(capturedCwd).toBe('/tmp/test')
     expect(result).toEqual({ workflows: mockWorkflows })
+  })
+})
+
+describe('workflow CRUD client functions', () => {
+  test("getWorkflow(cwd, 'who-is') requests /workflows/who-is?cwd=... without .json", async () => {
+    const doc = makeWorkflowDoc()
+    let capturedUrl = ''
+
+    server.use(
+      http.get(`${BASE}/workflows/who-is`, ({ request }) => {
+        capturedUrl = request.url
+        return HttpResponse.json(doc)
+      }),
+    )
+
+    const result = await getWorkflow('/tmp/test', 'who-is')
+
+    expect(result).toEqual(doc)
+    const parsed = new URL(capturedUrl)
+    expect(parsed.pathname).toBe('/workflows/who-is')
+    expect(parsed.pathname).not.toContain('.json')
+    expect(parsed.searchParams.get('cwd')).toBe('/tmp/test')
+  })
+
+  test('createWorkflow POSTs /workflows?cwd=... with a JSON body and returns the parsed document', async () => {
+    const body = {
+      name: 'new-flow',
+      workflow: makeWorkflowDoc({ name: 'new-flow' }).workflow,
+    }
+    const response = makeWorkflowDoc({ name: 'new-flow', workflow: body.workflow })
+    let capturedUrl = ''
+    let capturedBody: unknown = null
+    let capturedContentType = ''
+
+    server.use(
+      http.post(`${BASE}/workflows`, async ({ request }) => {
+        capturedUrl = request.url
+        capturedBody = await request.json()
+        capturedContentType = request.headers.get('content-type') ?? ''
+        return HttpResponse.json(response, { status: 201 })
+      }),
+    )
+
+    const result = await createWorkflow('/tmp/test', body)
+
+    expect(result).toEqual(response)
+    const parsed = new URL(capturedUrl)
+    expect(parsed.pathname).toBe('/workflows')
+    expect(parsed.searchParams.get('cwd')).toBe('/tmp/test')
+    expect(capturedContentType).toContain('application/json')
+    expect(capturedBody).toEqual(body)
+  })
+
+  test('updateWorkflow with a name in the body issues the rename request to /workflows/{old}', async () => {
+    const body = {
+      name: 'renamed-flow',
+      workflow: makeWorkflowDoc({ name: 'renamed-flow' }).workflow,
+    }
+    const response = makeWorkflowDoc({ name: 'renamed-flow', workflow: body.workflow })
+    let capturedUrl = ''
+    let capturedMethod = ''
+    let capturedBody: unknown = null
+
+    server.use(
+      http.put(`${BASE}/workflows/old-flow`, async ({ request }) => {
+        capturedUrl = request.url
+        capturedMethod = request.method
+        capturedBody = await request.json()
+        return HttpResponse.json(response)
+      }),
+    )
+
+    const result = await updateWorkflow('/tmp/test', 'old-flow', body)
+
+    expect(result).toEqual(response)
+    const parsed = new URL(capturedUrl)
+    expect(capturedMethod).toBe('PUT')
+    expect(parsed.pathname).toBe('/workflows/old-flow')
+    expect(parsed.searchParams.get('cwd')).toBe('/tmp/test')
+    expect(capturedBody).toEqual(body)
+  })
+
+  test("deleteWorkflow issues DELETE to /workflows/{name}?cwd=...", async () => {
+    let capturedUrl = ''
+    let capturedMethod = ''
+
+    server.use(
+      http.delete(`${BASE}/workflows/who-is`, ({ request }) => {
+        capturedUrl = request.url
+        capturedMethod = request.method
+        return HttpResponse.json({ deleted: 'who-is' })
+      }),
+    )
+
+    const result = await deleteWorkflow('/tmp/test', 'who-is')
+
+    expect(result).toEqual({ deleted: 'who-is' })
+    const parsed = new URL(capturedUrl)
+    expect(capturedMethod).toBe('DELETE')
+    expect(parsed.pathname).toBe('/workflows/who-is')
+    expect(parsed.searchParams.get('cwd')).toBe('/tmp/test')
+  })
+
+  test("getIdeCatalog(cwd, 'opencode') requests /ide/opencode/catalog?cwd=...", async () => {
+    const catalog: IdeCatalog = {
+      reachable: true,
+      agents: [{ id: 'general', name: 'general' }],
+      models: [{ id: 'opencode/default', name: 'Default' }],
+    }
+    let capturedUrl = ''
+
+    server.use(
+      http.get(`${BASE}/ide/opencode/catalog`, ({ request }) => {
+        capturedUrl = request.url
+        return HttpResponse.json(catalog)
+      }),
+    )
+
+    const result = await getIdeCatalog('/tmp/test', 'opencode')
+
+    expect(result).toEqual(catalog)
+    const parsed = new URL(capturedUrl)
+    expect(parsed.pathname).toBe('/ide/opencode/catalog')
+    expect(parsed.searchParams.get('cwd')).toBe('/tmp/test')
+  })
+
+  test('a 409 response surfaces as an ApiError with the server code', async () => {
+    server.use(
+      http.post(`${BASE}/workflows`, () =>
+        HttpResponse.json(
+          { code: 'WORKFLOW_EXISTS', message: 'Workflow already exists: who-is' },
+          { status: 409 },
+        ),
+      ),
+    )
+
+    try {
+      await createWorkflow('/tmp/test', {
+        name: 'who-is',
+        workflow: makeWorkflowDoc().workflow,
+      })
+      expect.fail('should have thrown ApiError')
+    } catch (err) {
+      expect(err).toBeInstanceOf(ApiError)
+      const apiErr = err as ApiError
+      expect(apiErr.status).toBe(409)
+      expect(apiErr.code).toBe('WORKFLOW_EXISTS')
+      expect(apiErr.message).toBe('Workflow already exists: who-is')
+    }
+  })
+})
+
+describe('workflow CRUD client functions (MSW integration)', () => {
+  test('create to get round-trip returns the stored workflow document', async () => {
+    const stored = new Map<string, WorkflowDoc>()
+
+    server.use(
+      http.post(`${BASE}/workflows`, async ({ request }) => {
+        const cwd = new URL(request.url).searchParams.get('cwd')
+        const body = (await request.json()) as { name: string; workflow: unknown }
+        const doc: WorkflowDoc = {
+          name: body.name,
+          path: `${cwd}/workflows/${body.name}.json`,
+          workflow: body.workflow,
+        }
+        stored.set(body.name, doc)
+        return HttpResponse.json(doc, { status: 201 })
+      }),
+      http.get(`${BASE}/workflows/:name`, ({ params }) => {
+        const doc = stored.get(String(params.name))
+        if (!doc) {
+          return HttpResponse.json({ code: 'NOT_FOUND', message: 'not found' }, { status: 404 })
+        }
+        return HttpResponse.json(doc)
+      }),
+    )
+
+    const workflow = makeWorkflowDoc({ name: 'round-trip' }).workflow
+    const created = await createWorkflow('/tmp/test', { name: 'round-trip', workflow })
+    const fetched = await getWorkflow('/tmp/test', 'round-trip')
+
+    expect(created).toEqual(fetched)
+    expect(fetched.workflow).toEqual(workflow)
   })
 })
 

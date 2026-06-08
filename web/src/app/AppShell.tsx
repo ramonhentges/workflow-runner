@@ -1,13 +1,37 @@
 import { Link, Outlet } from '@tanstack/react-router'
 import { CwdSwitcher } from '@/features/cwd/CwdSwitcher'
 import { useHealth } from '@/features/health/useHealth'
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarGroupLabel,
+  SidebarHeader,
+  SidebarInset,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarProvider,
+  SidebarRail,
+  SidebarTrigger,
+} from '@/components/ui/sidebar'
+import { Separator } from '@/components/ui/separator'
+import { ModeToggle } from '@/components/mode-toggle'
+
+const NAV_ITEMS = [
+  { to: '/', label: 'Dashboard', exact: true },
+  { to: '/start', label: 'Start Run', exact: false },
+  { to: '/workflows', label: 'Workflows', exact: false },
+] as const
 
 function DaemonStatus() {
   const { isSuccess, isError } = useHealth()
   const dot = isSuccess
-    ? 'bg-green-500'
+    ? 'bg-status-completed'
     : isError
-      ? 'bg-red-500'
+      ? 'bg-status-failed'
       : 'bg-muted-foreground/40'
   const label = isSuccess ? 'Daemon online' : isError ? 'Daemon offline' : 'Connecting…'
 
@@ -21,46 +45,56 @@ function DaemonStatus() {
 
 export function AppShell() {
   return (
-    <div className="flex h-screen" data-testid="app-shell">
-      <aside
-        className="w-64 shrink-0 border-r flex flex-col overflow-hidden"
-        data-testid="app-sidebar"
-      >
-        <div className="px-4 py-3 border-b flex items-center justify-between gap-2">
-          <span className="font-semibold text-sm">Workflow Runner</span>
-          <DaemonStatus />
-        </div>
-        <nav className="flex flex-col gap-1 p-2" aria-label="Main">
-          <Link
-            to="/"
-            activeOptions={{ exact: true }}
-            className="px-3 py-2 rounded text-sm hover:bg-accent hover:text-accent-foreground transition-colors"
-            activeProps={{ className: 'bg-accent font-medium text-accent-foreground' }}
-          >
-            Dashboard
-          </Link>
-          <Link
-            to="/start"
-            className="px-3 py-2 rounded text-sm hover:bg-accent hover:text-accent-foreground transition-colors"
-            activeProps={{ className: 'bg-accent font-medium text-accent-foreground' }}
-          >
-            Start Run
-          </Link>
-          <Link
-            to="/workflows"
-            className="px-3 py-2 rounded text-sm hover:bg-accent hover:text-accent-foreground transition-colors"
-            activeProps={{ className: 'bg-accent font-medium text-accent-foreground' }}
-          >
-            Workflows
-          </Link>
-        </nav>
-        <div className="flex-1 overflow-y-auto border-t">
+    <SidebarProvider data-testid="app-shell">
+      <Sidebar collapsible="icon" variant="inset" data-testid="app-sidebar">
+        <SidebarHeader>
+          <div className="flex items-center justify-between gap-2 px-2 py-1 group-data-[collapsible=icon]:justify-center">
+            <span className="font-semibold text-sm group-data-[collapsible=icon]:hidden">
+              Workflow Runner
+            </span>
+            <DaemonStatus />
+          </div>
+        </SidebarHeader>
+        <SidebarContent>
+          <SidebarGroup>
+            <SidebarGroupLabel>Navigation</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {NAV_ITEMS.map(item => (
+                  <SidebarMenuItem key={item.to}>
+                    <SidebarMenuButton asChild tooltip={item.label}>
+                      <Link
+                        to={item.to}
+                        activeOptions={item.exact ? { exact: true } : undefined}
+                        activeProps={{ 'data-active': 'true' }}
+                      >
+                        <span>{item.label}</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                ))}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        </SidebarContent>
+        <SidebarFooter>
           <CwdSwitcher />
-        </div>
-      </aside>
-      <main className="flex-1 min-h-0 overflow-auto p-6">
-        <Outlet />
-      </main>
-    </div>
+        </SidebarFooter>
+        <SidebarRail />
+      </Sidebar>
+      <SidebarInset>
+        <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
+          <SidebarTrigger />
+          <Separator orientation="vertical" className="h-4" />
+          {/* Header action slot — ModeToggle mounts here (Task 9). */}
+          <div className="ml-auto flex items-center gap-2" data-testid="header-actions">
+            <ModeToggle />
+          </div>
+        </header>
+        <main className="flex-1 min-h-0 overflow-auto p-6">
+          <Outlet />
+        </main>
+      </SidebarInset>
+    </SidebarProvider>
   )
 }

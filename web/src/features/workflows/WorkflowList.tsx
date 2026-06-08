@@ -3,14 +3,21 @@ import { Link, useNavigate } from '@tanstack/react-router'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Copy, Edit, Play, Plus, Trash2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
+import { Skeleton } from '@/components/ui/skeleton'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
 import { ApiError, deleteWorkflow, startRun } from '@/lib/api/client'
 import { useCwdStore } from '@/stores/cwd-store'
 import { useWorkflowList, workflowListQueryKey } from './useWorkflowList'
 import { workflowBareName, workflowDisplayName } from './workflowNames'
 import type { WorkflowItem } from '@/lib/api/types'
-
-const actionLinkClass =
-  'inline-flex h-8 items-center justify-center gap-2 whitespace-nowrap rounded-md border border-input bg-background px-3 text-xs font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring'
 
 function runActiveDeleteMessage(error: unknown): string {
   if (error instanceof ApiError && error.status === 409 && error.code === 'WORKFLOW_RUN_ACTIVE') {
@@ -82,15 +89,27 @@ export function WorkflowList() {
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between gap-3">
         <h2 className="text-lg font-semibold">Workflows</h2>
-        <Link to="/workflows/new" search={{ from: undefined }} className={actionLinkClass}>
-          <Plus className="size-4" aria-hidden="true" />
-          New workflow
-        </Link>
+        <Button asChild variant="outline" size="sm">
+          <Link to="/workflows/new" search={{ from: undefined }}>
+            <Plus className="size-4" aria-hidden="true" />
+            New workflow
+          </Link>
+        </Button>
       </div>
 
       {isLoading && (
-        <div data-testid="workflows-loading" className="text-center py-8 text-muted-foreground">
-          Loading workflows…
+        <div data-testid="workflows-loading" className="flex flex-col gap-2">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div
+              key={i}
+              data-testid="workflow-row-skeleton"
+              className="flex items-center gap-4 px-2 py-3"
+            >
+              <Skeleton className="h-4 w-40" />
+              <Skeleton className="h-4 w-56" />
+              <Skeleton className="ml-auto h-8 w-48" />
+            </div>
+          ))}
         </div>
       )}
 
@@ -121,111 +140,121 @@ export function WorkflowList() {
       )}
 
       {!isLoading && !isError && workflows.length === 0 && (
-        <div data-testid="no-workflows-state" className="text-center py-12 text-muted-foreground">
-          <p>No workflows found for this working directory.</p>
+        <div
+          data-testid="no-workflows-state"
+          className="flex flex-col items-center gap-3 py-12 text-center"
+        >
+          <p className="font-medium">No workflows yet</p>
+          <p className="text-sm text-muted-foreground">
+            Create your first workflow to start running it.
+          </p>
+          <Button asChild variant="outline" size="sm">
+            <Link
+              to="/workflows/new"
+              search={{ from: undefined }}
+              data-testid="create-first-workflow-action"
+            >
+              <Plus className="size-4" aria-hidden="true" />
+              Create your first workflow
+            </Link>
+          </Button>
         </div>
       )}
 
       {!isLoading && !isError && workflows.length > 0 && (
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b text-left text-muted-foreground">
-              <th className="pb-2 pr-4 font-medium">Workflow</th>
-              <th className="pb-2 pr-4 font-medium">File</th>
-              <th className="pb-2 font-medium text-right">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {workflows.map(workflow => {
-              const bareName = workflowBareName(workflow)
-              const isConfirming = confirmingName === bareName
-              const isDeleting = deleteMutation.isPending && isConfirming
-              const isStarting = startMutation.isPending && startingName === bareName
+        <Card className="overflow-hidden p-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Workflow</TableHead>
+                <TableHead>File</TableHead>
+                <TableHead className="text-right">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {workflows.map(workflow => {
+                const bareName = workflowBareName(workflow)
+                const isConfirming = confirmingName === bareName
+                const isDeleting = deleteMutation.isPending && isConfirming
+                const isStarting = startMutation.isPending && startingName === bareName
 
-              return (
-                <tr
-                  key={workflow.path}
-                  data-testid={`workflow-row-${bareName}`}
-                  className="border-b hover:bg-accent/50 transition-colors"
-                >
-                  <td className="py-2 pr-4 font-medium">{workflowDisplayName(workflow)}</td>
-                  <td className="py-2 pr-4 text-muted-foreground font-mono text-xs">
-                    {workflow.path}
-                  </td>
-                  <td className="py-2">
-                    <div className="flex justify-end gap-2">
-                      <Button
-                        type="button"
-                        size="sm"
-                        disabled={isStarting}
-                        onClick={() => {
-                          setStartingName(bareName)
-                          startMutation.mutate(workflow)
-                        }}
-                      >
-                        <Play className="size-4" aria-hidden="true" />
-                        {isStarting ? 'Starting…' : 'Run'}
-                      </Button>
-                      <Link
-                        to="/workflows/$name/edit"
-                        params={{ name: bareName }}
-                        className={actionLinkClass}
-                      >
-                        <Edit className="size-4" aria-hidden="true" />
-                        Edit
-                      </Link>
-                      <Link
-                        to="/workflows/new"
-                        search={{ from: bareName }}
-                        className={actionLinkClass}
-                      >
-                        <Copy className="size-4" aria-hidden="true" />
-                        Duplicate
-                      </Link>
-                      {!isConfirming ? (
+                return (
+                  <TableRow key={workflow.path} data-testid={`workflow-row-${bareName}`}>
+                    <TableCell className="font-medium">{workflowDisplayName(workflow)}</TableCell>
+                    <TableCell className="text-muted-foreground font-mono text-xs">
+                      {workflow.path}
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex justify-end gap-2">
                         <Button
                           type="button"
-                          variant="destructive"
                           size="sm"
+                          disabled={isStarting}
                           onClick={() => {
-                            setConfirmingName(bareName)
-                            setDeleteError('')
+                            setStartingName(bareName)
+                            startMutation.mutate(workflow)
                           }}
                         >
-                          <Trash2 className="size-4" aria-hidden="true" />
-                          Delete
+                          <Play className="size-4" aria-hidden="true" />
+                          {isStarting ? 'Starting…' : 'Run'}
                         </Button>
-                      ) : (
-                        <>
+                        <Button asChild variant="outline" size="sm">
+                          <Link to="/workflows/$name/edit" params={{ name: bareName }}>
+                            <Edit className="size-4" aria-hidden="true" />
+                            Edit
+                          </Link>
+                        </Button>
+                        <Button asChild variant="outline" size="sm">
+                          <Link to="/workflows/new" search={{ from: bareName }}>
+                            <Copy className="size-4" aria-hidden="true" />
+                            Duplicate
+                          </Link>
+                        </Button>
+                        {!isConfirming ? (
                           <Button
                             type="button"
                             variant="destructive"
                             size="sm"
-                            disabled={isDeleting}
-                            onClick={() => deleteMutation.mutate(workflow)}
+                            onClick={() => {
+                              setConfirmingName(bareName)
+                              setDeleteError('')
+                            }}
                           >
                             <Trash2 className="size-4" aria-hidden="true" />
-                            {isDeleting ? 'Deleting…' : 'Confirm'}
+                            Delete
                           </Button>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            disabled={isDeleting}
-                            onClick={() => setConfirmingName(null)}
-                          >
-                            <X className="size-4" aria-hidden="true" />
-                            Cancel
-                          </Button>
-                        </>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
+                        ) : (
+                          <>
+                            <Button
+                              type="button"
+                              variant="destructive"
+                              size="sm"
+                              disabled={isDeleting}
+                              onClick={() => deleteMutation.mutate(workflow)}
+                            >
+                              <Trash2 className="size-4" aria-hidden="true" />
+                              {isDeleting ? 'Deleting…' : 'Confirm'}
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              disabled={isDeleting}
+                              onClick={() => setConfirmingName(null)}
+                            >
+                              <X className="size-4" aria-hidden="true" />
+                              Cancel
+                            </Button>
+                          </>
+                        )}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                )
+              })}
+            </TableBody>
+          </Table>
+        </Card>
       )}
     </div>
   )

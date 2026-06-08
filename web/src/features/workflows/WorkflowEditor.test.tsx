@@ -252,9 +252,10 @@ describe('WorkflowEditor — validation blocking', () => {
     renderEditor({ mode: 'create', initialValues })
     await screen.findByTestId('workflow-editor-form')
 
-    // the dangling reference is kept as a selectable option, not dropped
-    const select = screen.getByTestId('edge-next-step-input-0-0') as HTMLSelectElement
-    expect(select.value).toBe('nonexistent')
+    // the dangling reference is kept as a selectable option, not dropped: the
+    // Radix Select trigger reflects the persisted, unmatched value.
+    const trigger = screen.getByTestId('edge-next-step-input-0-0')
+    expect(trigger).toHaveTextContent('nonexistent (missing)')
 
     await user.click(screen.getByTestId('save-button'))
 
@@ -416,6 +417,65 @@ describe('WorkflowEditor — save success', () => {
     })
     expect(updatedName).toBe('existing-flow')
   })
+
+  test('an edit that renames the file sends the new name in the PUT body', async () => {
+    const user = userEvent.setup()
+    let putBody: unknown = null
+
+    const existingDoc: WorkflowDoc = {
+      name: 'old-name',
+      path: '/p/workflows/old-name.json',
+      workflow: {
+        id: 'ex',
+        name: 'Existing',
+        description: '',
+        version: '1.0',
+        steps: [
+          {
+            id: 'step-1',
+            agent: 'agent',
+            model: 'model',
+            ide: 'claude-code',
+            mode: 'interactive',
+            description: '',
+            edges: [],
+          },
+        ],
+      },
+    }
+
+    server.use(
+      http.put(`${BASE}/workflows/:name`, async ({ request }) => {
+        putBody = await request.json()
+        return HttpResponse.json({
+          name: 'new-name',
+          path: '/p/workflows/new-name.json',
+          workflow: {},
+        })
+      }),
+      http.get(`${BASE}/workflows`, () => HttpResponse.json({ workflows: [] })),
+    )
+
+    const { router } = renderEditor({
+      mode: 'edit',
+      existingName: 'old-name',
+      initialValues: workflowDocToFormData(existingDoc),
+    })
+
+    await screen.findByTestId('workflow-editor-form')
+
+    const fileNameInput = screen.getByTestId('workflow-filename-input')
+    await user.clear(fileNameInput)
+    await user.type(fileNameInput, 'new-name')
+
+    await user.click(screen.getByTestId('save-button'))
+
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe('/workflows')
+    })
+    expect(putBody).not.toBeNull()
+    expect((putBody as { name?: string }).name).toBe('new-name')
+  })
 })
 
 // ── Edit: out-of-catalog ide round-trip ───────────────────────────────────────
@@ -448,6 +508,7 @@ describe('WorkflowEditor — out-of-catalog ide', () => {
   }
 
   test('renders a custom option so an unsupported ide is shown selected', async () => {
+    const user = userEvent.setup()
     server.use(
       http.get(`${BASE}/ide/:ide/catalog`, () =>
         HttpResponse.json({ reachable: false, agents: [], models: [] }),
@@ -462,10 +523,14 @@ describe('WorkflowEditor — out-of-catalog ide', () => {
 
     await screen.findByTestId('workflow-editor-form')
 
-    const select = screen.getByTestId('step-ide-select-0') as HTMLSelectElement
-    expect(select.value).toBe('cursor')
+    // The Radix Select trigger reflects the persisted, unsupported ide.
+    const trigger = screen.getByTestId('step-ide-select-0')
+    expect(trigger).toHaveTextContent('cursor (custom)')
+
+    // Opening the listbox shows the custom value as a selectable option.
+    await user.click(trigger)
     expect(
-      screen.getByRole('option', { name: 'cursor (custom)' }),
+      await screen.findByRole('option', { name: 'cursor (custom)' }),
     ).toBeInTheDocument()
   })
 
@@ -505,6 +570,120 @@ describe('WorkflowEditor — out-of-catalog ide', () => {
 
     const body = putBody as { workflow: { steps: Array<{ ide: string }> } }
     expect(body.workflow.steps[0].ide).toBe('cursor')
+  })
+})
+
+// ── shadcn Select fields (ide / mode) ─────────────────────────────────────────
+
+describe('WorkflowEditor — shadcn Select fields', () => {
+  beforeEach(() => {
+    useCwdStore.getState().addCwd('proj', '/p')
+  })
+
+  test('a new step renders all field controls with their testids', async () => {
+    const user = userEvent.setup()
+    renderEditor({ mode: 'create' })
+    await screen.findByTestId('add-step-button')
+
+    await user.click(screen.getByTestId('add-step-button'))
+
+    expect(screen.getByTestId('step-row-0')).toBeInTheDocument()
+    expect(screen.getByTestId('step-id-input-0')).toBeInTheDocument()
+    expect(screen.getByTestId('step-ide-select-0')).toBeInTheDocument()
+    expect(screen.getByTestId('step-mode-select-0')).toBeInTheDocument()
+    expect(screen.getByTestId('step-agent-input-0')).toBeInTheDocument()
+    expect(screen.getByTestId('step-model-input-0')).toBeInTheDocument()
+  })
+
+  test('selecting an IDE via the Select updates the Controller-bound ide value', async () => {
+    const user = userEvent.setup()
+    server.use(
+      http.get(`${BASE}/ide/:ide/catalog`, () =>
+        HttpResponse.json({ reachable: false, agents: [], models: [] }),
+      ),
+    )
+    renderEditor({ mode: 'create' })
+    await screen.findByTestId('add-step-button')
+
+    await user.click(screen.getByTestId('add-step-button'))
+
+    const trigger = screen.getByTestId('step-ide-select-0')
+    // Default is claude-code
+    expect(trigger).toHaveTextContent('claude-code')
+
+    await user.click(trigger)
+    await user.click(await screen.findByRole('option', { name: 'codex' }))
+
+    expect(trigger).toHaveTextContent('codex')
+  })
+
+  test('mode Select toggles between interactive and autonomous', async () => {
+    const user = userEvent.setup()
+    server.use(
+      http.get(`${BASE}/ide/:ide/catalog`, () =>
+        HttpResponse.json({ reachable: false, agents: [], models: [] }),
+      ),
+    )
+    renderEditor({ mode: 'create' })
+    await screen.findByTestId('add-step-button')
+
+    await user.click(screen.getByTestId('add-step-button'))
+
+    const trigger = screen.getByTestId('step-mode-select-0')
+    expect(trigger).toHaveTextContent('interactive')
+
+    await user.click(trigger)
+    await user.click(await screen.findByRole('option', { name: 'autonomous' }))
+    expect(trigger).toHaveTextContent('autonomous')
+
+    await user.click(trigger)
+    await user.click(await screen.findByRole('option', { name: 'interactive' }))
+    expect(trigger).toHaveTextContent('interactive')
+  })
+
+  test('an invalid filename surfaces filename-error and blocks submit', async () => {
+    const user = userEvent.setup()
+    let saved = false
+    server.use(
+      http.get(`${BASE}/ide/:ide/catalog`, () =>
+        HttpResponse.json({ reachable: false, agents: [], models: [] }),
+      ),
+      http.post(`${BASE}/workflows`, () => {
+        saved = true
+        return HttpResponse.json({}, { status: 201 })
+      }),
+    )
+
+    renderEditor({ mode: 'create' })
+    await screen.findByTestId('workflow-filename-input')
+
+    await user.type(screen.getByTestId('workflow-filename-input'), 'bad/name')
+    await user.click(screen.getByTestId('add-step-button'))
+    await user.type(screen.getByTestId('step-id-input-0'), 'step-1')
+    await user.type(screen.getByTestId('step-agent-input-0'), 'agent')
+    await user.type(screen.getByTestId('step-model-input-0'), 'model')
+
+    await user.click(screen.getByTestId('save-button'))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('filename-error')).toBeInTheDocument()
+    })
+    expect(saved).toBe(false)
+  })
+
+  test('move-up/move-down buttons are disabled at the list boundaries', async () => {
+    const user = userEvent.setup()
+    renderEditor({ mode: 'create' })
+    await screen.findByTestId('add-step-button')
+
+    await user.click(screen.getByTestId('add-step-button'))
+    await user.click(screen.getByTestId('add-step-button'))
+
+    // First step cannot move up; last step cannot move down.
+    expect(screen.getByTestId('move-step-up-0')).toBeDisabled()
+    expect(screen.getByTestId('move-step-down-0')).toBeEnabled()
+    expect(screen.getByTestId('move-step-up-1')).toBeEnabled()
+    expect(screen.getByTestId('move-step-down-1')).toBeDisabled()
   })
 })
 
@@ -799,11 +978,13 @@ describe('WorkflowEditor — edge management within a step', () => {
 
     await user.click(screen.getByTestId('add-edge-button-0'))
 
-    const select = screen.getByTestId('edge-next-step-input-0-0') as HTMLSelectElement
-    await waitFor(() => {
-      expect(Array.from(select.options).map(o => o.value)).toContain('second')
-    })
-    const optionValues = Array.from(select.options).map(o => o.value)
+    // Open the Radix listbox and read the offered options.
+    const trigger = screen.getByTestId('edge-next-step-input-0-0')
+    await user.click(trigger)
+    await screen.findByRole('option', { name: 'second' })
+    const optionValues = screen
+      .getAllByRole('option')
+      .map(o => o.textContent)
     // the sibling step is offered; the step's own id is not (no trivial self-loop)
     expect(optionValues).toContain('second')
     expect(optionValues).not.toContain('first')
@@ -822,12 +1003,10 @@ describe('WorkflowEditor — edge management within a step', () => {
 
     await user.click(screen.getByTestId('add-edge-button-0'))
 
-    const select = screen.getByTestId('edge-next-step-input-0-0') as HTMLSelectElement
-    await waitFor(() => {
-      expect(Array.from(select.options).map(o => o.value)).toContain('target-step')
-    })
-    await user.selectOptions(select, 'target-step')
-    expect(select.value).toBe('target-step')
+    const trigger = screen.getByTestId('edge-next-step-input-0-0')
+    await user.click(trigger)
+    await user.click(await screen.findByRole('option', { name: 'target-step' }))
+    expect(trigger).toHaveTextContent('target-step')
   })
 })
 
@@ -861,7 +1040,8 @@ describe('AgentModelPicker — catalog integration', () => {
 
     await user.click(screen.getByTestId('add-step-button'))
 
-    await user.selectOptions(screen.getByTestId('step-ide-select-0'), 'opencode')
+    await user.click(screen.getByTestId('step-ide-select-0'))
+    await user.click(await screen.findByRole('option', { name: 'opencode' }))
 
     await waitFor(() => {
       expect(screen.getByTestId('step-agent-input-0-status')).toHaveTextContent(
@@ -969,8 +1149,9 @@ describe('AgentModelPicker — catalog integration', () => {
       expect(fetchedIdes).toContain('claude-code')
     })
 
-    // Switch to opencode
-    await user.selectOptions(screen.getByTestId('step-ide-select-0'), 'opencode')
+    // Switch to opencode via the Radix Select
+    await user.click(screen.getByTestId('step-ide-select-0'))
+    await user.click(await screen.findByRole('option', { name: 'opencode' }))
 
     await waitFor(() => {
       expect(fetchedIdes).toContain('opencode')

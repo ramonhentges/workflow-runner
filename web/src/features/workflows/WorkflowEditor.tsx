@@ -6,6 +6,13 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card'
 import { useCwdStore } from '@/stores/cwd-store'
 import { ApiError, createWorkflow, updateWorkflow } from '@/lib/api/client'
 import type { WorkflowUpdateBody } from '@/lib/api/types'
@@ -108,105 +115,111 @@ export function WorkflowEditor({ mode, existingName, initialValues }: WorkflowEd
           {mode === 'create' ? 'New Workflow' : `Edit: ${existingName}`}
         </h2>
 
-        <div className="flex flex-col gap-4">
-          <h3 className="text-sm font-semibold text-muted-foreground">Workflow</h3>
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm text-muted-foreground">Workflow</CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-4">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="flex flex-col gap-1">
+                <Label htmlFor="workflow-filename">File name</Label>
+                <Input
+                  id="workflow-filename"
+                  {...form.register('fileName')}
+                  placeholder="my-workflow"
+                  data-testid="workflow-filename-input"
+                />
+                {errors.fileName && (
+                  <p className="text-xs text-destructive" data-testid="filename-error">
+                    {errors.fileName.message}
+                  </p>
+                )}
+              </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div className="flex flex-col gap-1">
-              <Label htmlFor="workflow-filename">File name</Label>
-              <Input
-                id="workflow-filename"
-                {...form.register('fileName')}
-                placeholder="my-workflow"
-                data-testid="workflow-filename-input"
-              />
-              {errors.fileName && (
-                <p className="text-xs text-destructive" data-testid="filename-error">
-                  {errors.fileName.message}
-                </p>
-              )}
+              <div className="flex flex-col gap-1">
+                <Label htmlFor="workflow-name">Display name</Label>
+                <Input
+                  id="workflow-name"
+                  {...form.register('workflowName')}
+                  placeholder="My Workflow"
+                />
+              </div>
+
+              <div className="flex flex-col gap-1">
+                <Label htmlFor="workflow-id">ID</Label>
+                <Input
+                  id="workflow-id"
+                  {...form.register('workflowId')}
+                  placeholder="my-workflow-id"
+                />
+              </div>
+
+              <div className="flex flex-col gap-1">
+                <Label htmlFor="workflow-version">Version</Label>
+                <Input
+                  id="workflow-version"
+                  {...form.register('version')}
+                  placeholder="1.0"
+                />
+              </div>
             </div>
 
             <div className="flex flex-col gap-1">
-              <Label htmlFor="workflow-name">Display name</Label>
+              <Label htmlFor="workflow-description">Description</Label>
               <Input
-                id="workflow-name"
-                {...form.register('workflowName')}
-                placeholder="My Workflow"
+                id="workflow-description"
+                {...form.register('description')}
+                placeholder="Workflow description"
               />
             </div>
+          </CardContent>
+        </Card>
 
-            <div className="flex flex-col gap-1">
-              <Label htmlFor="workflow-id">ID</Label>
-              <Input
-                id="workflow-id"
-                {...form.register('workflowId')}
-                placeholder="my-workflow-id"
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm text-muted-foreground">Steps</CardTitle>
+            <CardAction>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() =>
+                  append({
+                    id: '',
+                    agent: '',
+                    model: '',
+                    ide: 'claude-code',
+                    mode: 'interactive',
+                    description: '',
+                    edges: [],
+                  })
+                }
+                data-testid="add-step-button"
+              >
+                Add step
+              </Button>
+            </CardAction>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-3">
+            {errors.steps && !Array.isArray(errors.steps) && (
+              <p className="text-xs text-destructive" data-testid="steps-array-error">
+                {(errors.steps as { message?: string }).message}
+              </p>
+            )}
+
+            {stepFields.map((field, index) => (
+              <StepFields
+                key={field.id}
+                stepIndex={index}
+                totalSteps={stepFields.length}
+                control={form.control}
+                onRemove={() => remove(index)}
+                onMoveUp={() => move(index, index - 1)}
+                onMoveDown={() => move(index, index + 1)}
               />
-            </div>
-
-            <div className="flex flex-col gap-1">
-              <Label htmlFor="workflow-version">Version</Label>
-              <Input
-                id="workflow-version"
-                {...form.register('version')}
-                placeholder="1.0"
-              />
-            </div>
-          </div>
-
-          <div className="flex flex-col gap-1">
-            <Label htmlFor="workflow-description">Description</Label>
-            <Input
-              id="workflow-description"
-              {...form.register('description')}
-              placeholder="Workflow description"
-            />
-          </div>
-        </div>
-
-        <div className="flex flex-col gap-3">
-          <div className="flex items-center justify-between">
-            <h3 className="text-sm font-semibold text-muted-foreground">Steps</h3>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() =>
-                append({
-                  id: '',
-                  agent: '',
-                  model: '',
-                  ide: 'claude-code',
-                  mode: 'interactive',
-                  description: '',
-                  edges: [],
-                })
-              }
-              data-testid="add-step-button"
-            >
-              Add step
-            </Button>
-          </div>
-
-          {errors.steps && !Array.isArray(errors.steps) && (
-            <p className="text-xs text-destructive" data-testid="steps-array-error">
-              {(errors.steps as { message?: string }).message}
-            </p>
-          )}
-
-          {stepFields.map((field, index) => (
-            <StepFields
-              key={field.id}
-              stepIndex={index}
-              totalSteps={stepFields.length}
-              control={form.control}
-              onRemove={() => remove(index)}
-              onMoveUp={() => move(index, index - 1)}
-              onMoveDown={() => move(index, index + 1)}
-            />
-          ))}
-        </div>
+            ))}
+          </CardContent>
+        </Card>
 
         {serverError && (
           <p

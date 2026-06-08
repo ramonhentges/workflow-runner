@@ -10,6 +10,7 @@ import {
   workflowDocToFormData,
 } from './features/workflows/WorkflowDraftSchema'
 import { useCwdStore } from './stores/cwd-store'
+import { parseStatus, type RunStatus } from './lib/api/types'
 
 function NotFound() {
   return (
@@ -28,6 +29,10 @@ const rootRoute = createRootRoute({
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/',
+  // Dashboard status filter lives in the URL (ADR-003); unknown values coerce to no filter.
+  validateSearch: (search: Record<string, unknown>): { status?: RunStatus } => ({
+    status: parseStatus(search.status),
+  }),
   component: RunsTable,
 })
 

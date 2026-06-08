@@ -10,7 +10,7 @@ import {
   Outlet,
   createMemoryHistory,
 } from '@tanstack/react-router'
-import { http, HttpResponse } from 'msw'
+import { http, HttpResponse, delay } from 'msw'
 import type { ReactNode } from 'react'
 import { server } from '../../../test/setup'
 import { useCwdStore } from '@/stores/cwd-store'
@@ -141,6 +141,66 @@ describe('WorkflowList rendering', () => {
     expect(screen.getByTestId('workflow-row-beta')).toBeInTheDocument()
     expect(screen.getByText('alpha-flow')).toBeInTheDocument()
     expect(screen.getByText('/p/workflows/beta.json')).toBeInTheDocument()
+    // Re-skinned to shadcn Table/Card primitives.
+    expect(screen.getByRole('table')).toHaveAttribute('data-slot', 'table')
+    expect(document.querySelector('[data-slot="card"]')).toBeInTheDocument()
+  })
+
+  test('renders skeleton rows (not plain text) while the first list request is in flight', async () => {
+    useCwdStore.getState().addCwd('proj', '/p')
+    server.use(
+      http.get(`${BASE}/workflows`, async () => {
+        await delay('infinite')
+        return HttpResponse.json({ workflows: [] })
+      }),
+    )
+
+    renderWorkflowList()
+
+    const loading = await screen.findByTestId('workflows-loading')
+    expect(within(loading).getAllByTestId('workflow-row-skeleton').length).toBeGreaterThan(0)
+    expect(within(loading).queryByText(/loading/i)).not.toBeInTheDocument()
+    expect(screen.queryByRole('table')).not.toBeInTheDocument()
+  })
+
+  test('transitions from skeleton rows to populated rows once the query resolves', async () => {
+    useCwdStore.getState().addCwd('proj', '/p')
+    let release: () => void = () => {}
+    const gate = new Promise<void>(resolve => {
+      release = resolve
+    })
+    server.use(
+      http.get(`${BASE}/workflows`, async () => {
+        await gate
+        return HttpResponse.json({
+          workflows: [{ name: 'alpha.json', path: '/p/workflows/alpha.json' }],
+        })
+      }),
+    )
+
+    renderWorkflowList()
+
+    const loading = await screen.findByTestId('workflows-loading')
+    expect(within(loading).getAllByTestId('workflow-row-skeleton').length).toBeGreaterThan(0)
+    expect(screen.queryByRole('table')).not.toBeInTheDocument()
+
+    release()
+    await screen.findByTestId('workflow-row-alpha')
+    expect(screen.getByRole('table')).toBeInTheDocument()
+    expect(screen.queryByTestId('workflows-loading')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('workflow-row-skeleton')).not.toBeInTheDocument()
+  })
+
+  test('shows the error state when the list query fails', async () => {
+    useCwdStore.getState().addCwd('proj', '/p')
+    server.use(
+      http.get(`${BASE}/workflows`, () => HttpResponse.json({ message: 'boom' }, { status: 500 })),
+    )
+
+    renderWorkflowList()
+
+    expect(await screen.findByTestId('workflows-error')).toBeInTheDocument()
+    expect(screen.queryByRole('table')).not.toBeInTheDocument()
   })
 
   test('shows the no-cwd prompt when no project is active', async () => {
@@ -159,13 +219,32 @@ describe('WorkflowList rendering', () => {
     expect(fetched).toBe(false)
   })
 
-  test('shows the empty state when the active project has no workflows', async () => {
+  test('shows an action-oriented empty state linking to create a workflow', async () => {
     useCwdStore.getState().addCwd('proj', '/p')
     server.use(http.get(`${BASE}/workflows`, () => HttpResponse.json({ workflows: [] })))
 
     renderWorkflowList()
 
-    expect(await screen.findByTestId('no-workflows-state')).toBeInTheDocument()
+    const empty = await screen.findByTestId('no-workflows-state')
+    expect(screen.queryByRole('table')).not.toBeInTheDocument()
+    const action = within(empty).getByTestId('create-first-workflow-action')
+    expect(action).toHaveAttribute('href', '/workflows/new')
+  })
+})
+
+describe('WorkflowList empty-state action (integration)', () => {
+  test('clicking the create-first-workflow action navigates to the new workflow route', async () => {
+    const user = userEvent.setup()
+    useCwdStore.getState().addCwd('proj', '/p')
+    server.use(http.get(`${BASE}/workflows`, () => HttpResponse.json({ workflows: [] })))
+
+    const { router } = renderWorkflowList()
+
+    const empty = await screen.findByTestId('no-workflows-state')
+    await user.click(within(empty).getByTestId('create-first-workflow-action'))
+
+    await screen.findByTestId('new-workflow-page')
+    expect(router.state.location.pathname).toBe('/workflows/new')
   })
 })
 
@@ -322,6 +401,26 @@ describe('WorkflowList navigation', () => {
 
     await screen.findByTestId('edit-workflow-page')
     expect(router.state.location.pathname).toBe('/workflows/alpha/edit')
+  })
+
+  test('action links are styled by the canonical Button primitive, not a hand-copied class string', async () => {
+    useCwdStore.getState().addCwd('proj', '/p')
+    const workflows: WorkflowItem[] = [{ name: 'alpha.json', path: '/p/workflows/alpha.json' }]
+    server.use(http.get(`${BASE}/workflows`, () => HttpResponse.json({ workflows })))
+    renderWorkflowList()
+
+    const row = await screen.findByTestId('workflow-row-alpha')
+    for (const name of ['Edit', 'Duplicate']) {
+      const link = within(row).getByRole('link', { name })
+      // data-slot="button" only comes from the Button primitive (via asChild Slot),
+      // proving the styling has a single source of truth.
+      expect(link).toHaveAttribute('data-slot', 'button')
+      expect(link.className).toContain('border-input')
+      expect(link.className).toContain('h-8')
+    }
+
+    const newLink = screen.getByRole('link', { name: 'New workflow' })
+    expect(newLink).toHaveAttribute('data-slot', 'button')
   })
 })
 

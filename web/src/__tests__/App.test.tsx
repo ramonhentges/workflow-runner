@@ -3,6 +3,7 @@ import { render, screen } from '@testing-library/react'
 import { RouterProvider, createRouter, createMemoryHistory } from '@tanstack/react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { routeTree } from '../router'
+import { ThemeProvider } from '@/components/theme-provider'
 
 function renderApp(initialPath = '/') {
   const queryClient = new QueryClient({
@@ -11,9 +12,11 @@ function renderApp(initialPath = '/') {
   const history = createMemoryHistory({ initialEntries: [initialPath] })
   const testRouter = createRouter({ routeTree, history })
   return render(
-    <QueryClientProvider client={queryClient}>
-      <RouterProvider router={testRouter} />
-    </QueryClientProvider>,
+    <ThemeProvider>
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={testRouter} />
+      </QueryClientProvider>
+    </ThemeProvider>,
   )
 }
 

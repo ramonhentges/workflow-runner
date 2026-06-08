@@ -3,6 +3,13 @@ import type { Control } from 'react-hook-form'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import type { WorkflowDraft } from './WorkflowDraftSchema'
 import { EdgesField } from './EdgesField'
 import { AgentModelPicker } from './AgentModelPicker'
@@ -38,10 +45,10 @@ export function StepFields({
   const { data: catalog, isFetching: catalogFetching } = useIdeCatalog(currentIde)
 
   // A loaded workflow may carry an `ide` outside the four built-in profiles
-  // (the domain layer accepts any non-empty string). The native <select> has no
-  // matching <option> for such a value, so render an extra "custom" option to
-  // faithfully show and round-trip the persisted ide instead of silently
-  // displaying — and on edit, overwriting it with — a built-in.
+  // (the domain layer accepts any non-empty string). The Select has no matching
+  // SelectItem for such a value, so render an extra "custom" item to faithfully
+  // show and round-trip the persisted ide instead of silently displaying — and
+  // on edit, overwriting it with — a built-in.
   const hasCustomIde =
     typeof currentIde === 'string' &&
     currentIde !== '' &&
@@ -115,21 +122,33 @@ export function StepFields({
 
         <div className="flex flex-col gap-1">
           <Label htmlFor={`step-ide-${stepIndex}`}>IDE</Label>
-          <select
-            id={`step-ide-${stepIndex}`}
-            {...register(`steps.${stepIndex}.ide`)}
-            className="border rounded px-3 py-2 text-sm bg-background"
-            data-testid={`step-ide-select-${stepIndex}`}
-          >
-            {hasCustomIde && (
-              <option value={currentIde}>{currentIde} (custom)</option>
+          <Controller
+            name={`steps.${stepIndex}.ide`}
+            control={control}
+            render={({ field }) => (
+              <Select value={field.value} onValueChange={field.onChange}>
+                <SelectTrigger
+                  id={`step-ide-${stepIndex}`}
+                  className="w-full"
+                  data-testid={`step-ide-select-${stepIndex}`}
+                >
+                  <SelectValue placeholder="Select an IDE" />
+                </SelectTrigger>
+                <SelectContent>
+                  {hasCustomIde && (
+                    <SelectItem value={currentIde as string}>
+                      {currentIde} (custom)
+                    </SelectItem>
+                  )}
+                  {SUPPORTED_IDES.map(ide => (
+                    <SelectItem key={ide} value={ide}>
+                      {ide}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             )}
-            {SUPPORTED_IDES.map(ide => (
-              <option key={ide} value={ide}>
-                {ide}
-              </option>
-            ))}
-          </select>
+          />
           {stepErrors?.ide && (
             <p className="text-xs text-destructive">{stepErrors.ide.message}</p>
           )}
@@ -137,15 +156,25 @@ export function StepFields({
 
         <div className="flex flex-col gap-1">
           <Label htmlFor={`step-mode-${stepIndex}`}>Mode</Label>
-          <select
-            id={`step-mode-${stepIndex}`}
-            {...register(`steps.${stepIndex}.mode`)}
-            className="border rounded px-3 py-2 text-sm bg-background"
-            data-testid={`step-mode-select-${stepIndex}`}
-          >
-            <option value="interactive">interactive</option>
-            <option value="autonomous">autonomous</option>
-          </select>
+          <Controller
+            name={`steps.${stepIndex}.mode`}
+            control={control}
+            render={({ field }) => (
+              <Select value={field.value} onValueChange={field.onChange}>
+                <SelectTrigger
+                  id={`step-mode-${stepIndex}`}
+                  className="w-full"
+                  data-testid={`step-mode-select-${stepIndex}`}
+                >
+                  <SelectValue placeholder="Select a mode" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="interactive">interactive</SelectItem>
+                  <SelectItem value="autonomous">autonomous</SelectItem>
+                </SelectContent>
+              </Select>
+            )}
+          />
           {stepErrors?.mode && (
             <p className="text-xs text-destructive">{stepErrors.mode.message}</p>
           )}

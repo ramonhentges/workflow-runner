@@ -321,6 +321,29 @@ describe('RunControls — summary panel', () => {
   })
 })
 
+// ─── Unit: RunControls — status badge + summary Card ─────────────────────────
+
+describe('RunControls — status badge', () => {
+  test('renders a StatusBadge for a non-null status', () => {
+    withQueryClient(<RunControls runId="r1" status="running" summary={null} />)
+    const badge = document.querySelector('[data-slot="badge"][data-status="running"]')
+    expect(badge).not.toBeNull()
+    expect(badge).toHaveTextContent('Running')
+  })
+
+  test('does not render a StatusBadge when status is null', () => {
+    withQueryClient(<RunControls runId="r1" status={null} summary={null} />)
+    expect(document.querySelector('[data-slot="badge"][data-status]')).toBeNull()
+  })
+})
+
+describe('RunControls — summary Card', () => {
+  test('summary-panel is a shadcn Card', () => {
+    withQueryClient(<RunControls runId="r1" status="completed" summary="All done!" />)
+    expect(screen.getByTestId('summary-panel')).toHaveAttribute('data-slot', 'card')
+  })
+})
+
 // ─── Integration: RunView with fake socket ────────────────────────────────────
 
 describe('RunView integration (fake WebSocket + MSW)', () => {
@@ -576,7 +599,10 @@ describe('RunView integration (fake WebSocket + MSW)', () => {
     await waitFor(() => {
       expect(screen.getByTestId('socket-error-notice')).toBeInTheDocument()
     })
-    expect(screen.getByTestId('socket-error-notice')).toHaveTextContent('Event log overflow')
+    const errorNotice = screen.getByTestId('socket-error-notice')
+    expect(errorNotice).toHaveAttribute('role', 'alert')
+    expect(errorNotice).toHaveAttribute('data-slot', 'alert')
+    expect(errorNotice).toHaveTextContent('Event log overflow')
     // Transcript and run-view still mounted
     expect(screen.getByTestId('transcript')).toBeInTheDocument()
     expect(screen.getByText('Some output before error')).toBeInTheDocument()
@@ -607,6 +633,9 @@ describe('RunView integration (fake WebSocket + MSW)', () => {
     await waitFor(() => {
       expect(screen.getByTestId('socket-closed-notice')).toBeInTheDocument()
     })
+    const closedNotice = screen.getByTestId('socket-closed-notice')
+    expect(closedNotice).toHaveAttribute('role', 'status')
+    expect(closedNotice).toHaveAttribute('data-slot', 'alert')
     // Transcript remains in the DOM
     expect(screen.getByTestId('transcript')).toBeInTheDocument()
     expect(screen.getByText('Log entry before close')).toBeInTheDocument()

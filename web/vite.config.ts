@@ -19,7 +19,15 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       include: ['src/**/*.{ts,tsx}'],
-      exclude: ['src/main.tsx', 'src/**/*.d.ts'],
+      exclude: [
+        'src/main.tsx',
+        'src/**/*.d.ts',
+        // shadcn-generated primitives are vendored: we own the files but do not
+        // author them line-by-line, so coverage is measured on the app logic
+        // that consumes them, not on the generated Radix wrappers themselves.
+        'src/components/ui/**',
+        'src/hooks/use-mobile.ts',
+      ],
       thresholds: {
         lines: 80,
         functions: 80,

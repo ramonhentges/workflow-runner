@@ -281,9 +281,11 @@ describe('StartRunForm — picker selection', () => {
 
     renderForm()
 
-    // Wait for the picker to appear (exact label "Workflow" on the <select>)
-    const select = await screen.findByLabelText('Workflow')
-    await user.selectOptions(select, '/projects/myapp/workflows/wf1.json')
+    // Wait for the shadcn Select trigger (Radix combobox) to appear, then
+    // open it and choose the option by its visible workflow name.
+    const trigger = await screen.findByRole('combobox')
+    await user.click(trigger)
+    await user.click(await screen.findByRole('option', { name: 'wf1.json' }))
 
     await user.click(screen.getByRole('button', { name: /start run/i }))
 
@@ -293,6 +295,64 @@ describe('StartRunForm — picker selection', () => {
         cwd: '/projects/myapp',
       })
     })
+  })
+})
+
+// ─── Unit: select/manual mutual exclusion ───────────────────────────────────
+
+describe('StartRunForm — select/manual mutual exclusion', () => {
+  test('selecting a workflow clears a previously typed manual path', async () => {
+    const user = userEvent.setup()
+    useCwdStore.getState().addCwd('proj', '/projects/myapp')
+
+    server.use(
+      http.get(`${BASE}/workflows`, () =>
+        HttpResponse.json({
+          workflows: [{ name: 'wf1.json', path: '/projects/myapp/workflows/wf1.json' }],
+        }),
+      ),
+    )
+
+    renderForm()
+
+    const manual = await screen.findByLabelText(/enter a path manually/i)
+    await user.type(manual, '/some/manual/path.json')
+    expect(manual).toHaveValue('/some/manual/path.json')
+
+    const trigger = await screen.findByRole('combobox')
+    await user.click(trigger)
+    await user.click(await screen.findByRole('option', { name: 'wf1.json' }))
+
+    // The Select now reflects the chosen workflow and the manual path is cleared.
+    expect(trigger).toHaveTextContent('wf1.json')
+    expect(manual).toHaveValue('')
+  })
+
+  test('typing a manual path clears the select selection', async () => {
+    const user = userEvent.setup()
+    useCwdStore.getState().addCwd('proj', '/projects/myapp')
+
+    server.use(
+      http.get(`${BASE}/workflows`, () =>
+        HttpResponse.json({
+          workflows: [{ name: 'wf1.json', path: '/projects/myapp/workflows/wf1.json' }],
+        }),
+      ),
+    )
+
+    renderForm()
+
+    const trigger = await screen.findByRole('combobox')
+    await user.click(trigger)
+    await user.click(await screen.findByRole('option', { name: 'wf1.json' }))
+    expect(trigger).toHaveTextContent('wf1.json')
+
+    const manual = screen.getByLabelText(/enter a path manually/i)
+    await user.type(manual, '/some/manual/path.json')
+
+    // The Select falls back to its placeholder once a manual path is typed.
+    expect(trigger).toHaveTextContent('— select a workflow —')
+    expect(manual).toHaveValue('/some/manual/path.json')
   })
 })
 
@@ -319,8 +379,9 @@ describe('StartRunForm — integration: navigation', () => {
 
     renderForm()
 
-    const select = await screen.findByLabelText('Workflow')
-    await user.selectOptions(select, '/projects/myapp/workflows/alpha.json')
+    const trigger = await screen.findByRole('combobox')
+    await user.click(trigger)
+    await user.click(await screen.findByRole('option', { name: 'alpha.json' }))
     await user.click(screen.getByRole('button', { name: /start run/i }))
 
     expect(await screen.findByTestId('run-view-page')).toBeInTheDocument()
@@ -379,8 +440,8 @@ describe('StartRunForm — workflow listing states', () => {
 
     expect(await screen.findByTestId('workflows-error')).toBeInTheDocument()
     expect(screen.queryByTestId('workflows-loading')).not.toBeInTheDocument()
-    // Picker should not be present — no workflows data
-    expect(screen.queryByLabelText('Workflow')).not.toBeInTheDocument()
+    // Picker should not be present — no workflows data (no Radix combobox trigger)
+    expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
     // Manual path fallback is still accessible
     expect(screen.getByLabelText(/workflow path/i)).toBeInTheDocument()
   })

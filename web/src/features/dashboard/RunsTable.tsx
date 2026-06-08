@@ -1,30 +1,46 @@
 import { useState } from 'react'
-import { Link } from '@tanstack/react-router'
-import { cn } from '@/lib/utils'
+import { Link, useSearch } from '@tanstack/react-router'
+import { Play } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Skeleton } from '@/components/ui/skeleton'
+import { StatusBadge } from '@/components/status-badge'
+import { StatusSummaryCards } from './StatusSummaryCards'
+import { parseStatus } from '@/lib/api/types'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
 import { useCwdStore } from '@/stores/cwd-store'
 import { useRuns } from './useRuns'
-import type { RunStatus } from '@/lib/api/types'
 
-function statusClass(status: RunStatus): string {
-  switch (status) {
-    case 'running':
-      return 'text-blue-600 font-medium'
-    case 'completed':
-      return 'text-green-600'
-    case 'failed':
-      return 'text-red-600 font-medium'
-    case 'crashed':
-      return 'text-orange-500'
-    case 'aborted':
-      return 'text-gray-400'
-  }
+// Human-readable run duration derived in-view from startedAt/endedAt.
+// Unfinished runs (endedAt === null) have no settled duration yet.
+function formatDuration(startedAt: number, endedAt: number | null): string {
+  if (endedAt === null) return '—'
+  const totalSec = Math.max(0, Math.round((endedAt - startedAt) / 1000))
+  const h = Math.floor(totalSec / 3600)
+  const m = Math.floor((totalSec % 3600) / 60)
+  const s = totalSec % 60
+  if (h > 0) return `${h}h ${m}m`
+  if (m > 0) return `${m}m ${s}s`
+  return `${s}s`
 }
 
 export function RunsTable() {
   const [allRuns, setAllRuns] = useState(false)
   const activeCwd = useCwdStore(state => state.activeCwd())
   const { data: runs = [], isLoading, isError } = useRuns({ all: allRuns })
+
+  // Active status filter from the URL (ADR-003); applied to the already-polled array.
+  const search = useSearch({ strict: false }) as { status?: unknown }
+  const activeStatus = parseStatus(search.status)
+  const visibleRuns = activeStatus
+    ? runs.filter(run => run.status === activeStatus)
+    : runs
 
   if (!activeCwd) {
     return (
@@ -37,6 +53,8 @@ export function RunsTable() {
 
   return (
     <div className="flex flex-col gap-4">
+      <StatusSummaryCards all={allRuns} />
+
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold">Runs</h2>
         <Button
@@ -50,8 +68,20 @@ export function RunsTable() {
       </div>
 
       {isLoading && (
-        <div data-testid="loading-state" className="text-center py-8 text-muted-foreground">
-          Loading…
+        <div data-testid="loading-state" className="flex flex-col gap-2">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div
+              key={i}
+              data-testid="run-row-skeleton"
+              className="flex items-center gap-4 px-2 py-3"
+            >
+              <Skeleton className="size-6 rounded-full" />
+              <Skeleton className="h-4 w-32" />
+              <Skeleton className="h-4 w-24" />
+              <Skeleton className="ml-auto h-4 w-28" />
+              <Skeleton className="h-4 w-16" />
+            </div>
+          ))}
         </div>
       )}
 
@@ -62,59 +92,80 @@ export function RunsTable() {
       )}
 
       {!isLoading && !isError && runs.length === 0 && (
-        <div data-testid="no-runs-state" className="text-center py-12 text-muted-foreground">
-          <p>No runs found for this working directory.</p>
+        <div
+          data-testid="no-runs-state"
+          className="flex flex-col items-center gap-3 py-12 text-center"
+        >
+          <p className="font-medium">No runs yet</p>
+          <p className="text-sm text-muted-foreground">
+            Start a run to watch its progress here.
+          </p>
+          <Link
+            to="/start"
+            data-testid="start-run-action"
+            className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground shadow transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          >
+            <Play className="size-4" aria-hidden="true" />
+            Start a run
+          </Link>
         </div>
       )}
 
-      {!isLoading && !isError && runs.length > 0 && (
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b text-left text-muted-foreground">
-              <th className="pb-2 pr-4 font-medium">Slug</th>
-              <th className="pb-2 pr-4 font-medium">Workflow</th>
-              <th className="pb-2 pr-4 font-medium">Status</th>
-              <th className="pb-2 pr-4 font-medium">Current step</th>
-              <th className="pb-2 pr-4 font-medium">Started</th>
-              <th className="pb-2 pr-4 font-medium">Ended</th>
-              <th className="pb-2 font-medium">Attached</th>
-            </tr>
-          </thead>
-          <tbody>
-            {runs.map(run => (
-              <tr
+      {!isLoading && !isError && runs.length > 0 && visibleRuns.length === 0 && (
+        <div
+          data-testid="no-filtered-runs-state"
+          className="text-center py-12 text-muted-foreground"
+        >
+          <p>No {activeStatus} runs in this working directory.</p>
+        </div>
+      )}
+
+      {!isLoading && !isError && visibleRuns.length > 0 && (
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead className="w-10">Status</TableHead>
+              <TableHead>Workflow</TableHead>
+              <TableHead>Current step</TableHead>
+              <TableHead>Started</TableHead>
+              <TableHead>Duration</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {visibleRuns.map(run => (
+              <TableRow
                 key={run.id}
                 data-testid={`run-row-${run.id}`}
                 data-status={run.status}
-                className="border-b hover:bg-accent/50 transition-colors"
               >
-                <td className="py-2 pr-4">
+                <TableCell>
+                  <StatusBadge status={run.status} showLabel={false} />
+                </TableCell>
+                <TableCell>
                   <Link
                     to="/runs/$runId"
                     params={{ runId: run.id }}
-                    className="font-mono text-xs hover:underline"
+                    className="font-mono text-xs font-medium hover:underline"
                   >
                     {run.slug}
                   </Link>
-                </td>
-                <td className="py-2 pr-4 text-muted-foreground">
-                  {run.workflowPath.split('/').pop() ?? run.workflowPath}
-                </td>
-                <td className={cn('py-2 pr-4', statusClass(run.status))}>{run.status}</td>
-                <td className="py-2 pr-4 font-mono text-xs text-muted-foreground">
+                  <div className="text-xs text-muted-foreground">
+                    {run.workflowPath.split('/').pop() ?? run.workflowPath}
+                  </div>
+                </TableCell>
+                <TableCell className="font-mono text-xs text-muted-foreground">
                   {run.currentStepId ?? '—'}
-                </td>
-                <td className="py-2 pr-4 text-muted-foreground">
+                </TableCell>
+                <TableCell className="text-muted-foreground">
                   {new Date(run.startedAt).toLocaleString()}
-                </td>
-                <td className="py-2 pr-4 text-muted-foreground">
-                  {run.endedAt !== null ? new Date(run.endedAt).toLocaleString() : '—'}
-                </td>
-                <td className="py-2 text-muted-foreground">{run.attachedCount}</td>
-              </tr>
+                </TableCell>
+                <TableCell className="text-muted-foreground tabular-nums">
+                  {formatDuration(run.startedAt, run.endedAt)}
+                </TableCell>
+              </TableRow>
             ))}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       )}
     </div>
   )

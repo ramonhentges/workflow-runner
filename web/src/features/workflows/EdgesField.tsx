@@ -1,8 +1,20 @@
-import { useFieldArray, useFormContext, useWatch } from 'react-hook-form'
+import {
+  useFieldArray,
+  useFormContext,
+  useWatch,
+  Controller,
+} from 'react-hook-form'
 import type { Control } from 'react-hook-form'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import type { WorkflowDraft } from './WorkflowDraftSchema'
 
 interface EdgesFieldProps {
@@ -70,22 +82,33 @@ export function EdgesField({ stepIndex, control }: EdgesFieldProps) {
               <Label htmlFor={`edge-next-${stepIndex}-${edgeIndex}`}>
                 Next step ID
               </Label>
-              <select
-                id={`edge-next-${stepIndex}-${edgeIndex}`}
-                {...register(`steps.${stepIndex}.edges.${edgeIndex}.next_step`)}
-                className="border rounded px-3 py-2 text-sm bg-background"
-                data-testid={`edge-next-step-input-${stepIndex}-${edgeIndex}`}
-              >
-                <option value="">Select a step</option>
-                {isDangling && (
-                  <option value={currentNext}>{currentNext} (missing)</option>
+              <Controller
+                name={`steps.${stepIndex}.edges.${edgeIndex}.next_step`}
+                control={control}
+                render={({ field }) => (
+                  <Select value={field.value} onValueChange={field.onChange}>
+                    <SelectTrigger
+                      id={`edge-next-${stepIndex}-${edgeIndex}`}
+                      className="w-full"
+                      data-testid={`edge-next-step-input-${stepIndex}-${edgeIndex}`}
+                    >
+                      <SelectValue placeholder="Select a step" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {isDangling && (
+                        <SelectItem value={currentNext as string}>
+                          {currentNext} (missing)
+                        </SelectItem>
+                      )}
+                      {targetStepIds.map(id => (
+                        <SelectItem key={id} value={id}>
+                          {id}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 )}
-                {targetStepIds.map(id => (
-                  <option key={id} value={id}>
-                    {id}
-                  </option>
-                ))}
-              </select>
+              />
               {edgeErrors?.next_step && (
                 <p
                   className="text-xs text-destructive"

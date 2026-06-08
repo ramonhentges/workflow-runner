@@ -1,4 +1,6 @@
+import { CircleX } from 'lucide-react'
 import { useAttach } from '@/lib/ws/use-attach'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Transcript } from './Transcript'
 import { StepProgress } from './StepProgress'
 import { InputBox } from './InputBox'
@@ -12,24 +14,26 @@ export function RunView({ runId }: RunViewProps) {
   const { vm, sendInput } = useAttach(runId)
 
   return (
-    <div data-testid="run-view" className="flex flex-col h-full min-h-0">
+    <div data-testid="run-view" className="flex h-full min-h-0 flex-col">
       {vm.error && (
-        <div
+        <Alert
           data-testid="socket-error-notice"
-          role="alert"
-          className="px-4 py-2 text-sm bg-destructive/10 text-destructive border-b border-destructive/20"
+          variant="destructive"
+          className="rounded-none border-x-0 border-t-0"
         >
-          Socket error: {vm.error.code} — {vm.error.message}
-        </div>
+          <CircleX />
+          <AlertTitle>Socket error: {vm.error.code}</AlertTitle>
+          <AlertDescription>{vm.error.message}</AlertDescription>
+        </Alert>
       )}
       {vm.closed && (
-        <div
+        <Alert
           data-testid="socket-closed-notice"
           role="status"
-          className="px-4 py-2 text-sm bg-muted text-muted-foreground border-b"
+          className="rounded-none border-x-0 border-t-0 text-muted-foreground"
         >
-          Connection closed.
-        </div>
+          <AlertTitle>Connection closed.</AlertTitle>
+        </Alert>
       )}
       <StepProgress steps={vm.steps} />
       <Transcript items={vm.transcript} truncated={vm.backlogTruncated} />

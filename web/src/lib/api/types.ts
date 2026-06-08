@@ -1,7 +1,19 @@
 // Wire types mirroring src/app/api/schema.ts and src/domain/runner.ts.
 // Do not import from the runner package — types are redeclared here per ADR-005.
 
-export type RunStatus = 'running' | 'completed' | 'failed' | 'crashed' | 'aborted'
+// The five run statuses, in display order. Single source of truth for the
+// RunStatus union, the summary-card grid, and the dashboard `status` filter param.
+export const RUN_STATUSES = ['running', 'completed', 'failed', 'crashed', 'aborted'] as const
+
+export type RunStatus = (typeof RUN_STATUSES)[number]
+
+// Whitelist parser for the dashboard `?status=` search param (ADR-003):
+// any value outside the five known statuses coerces to "no filter".
+export function parseStatus(value: unknown): RunStatus | undefined {
+  return (RUN_STATUSES as readonly string[]).includes(value as string)
+    ? (value as RunStatus)
+    : undefined
+}
 
 export type RunnerEvent =
   | { type: 'banner'; step: { id: string }; index: number }

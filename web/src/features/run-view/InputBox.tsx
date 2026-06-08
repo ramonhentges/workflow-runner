@@ -19,7 +19,7 @@ export function InputBox({ enabled, onSend }: InputBoxProps) {
   }
 
   return (
-    <form onSubmit={handleSubmit} className="flex gap-2 p-4 border-t" data-testid="input-box">
+    <form onSubmit={handleSubmit} className="flex gap-2 border-t bg-background p-4" data-testid="input-box">
       <Input
         data-testid="chat-input"
         value={value}

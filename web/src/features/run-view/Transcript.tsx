@@ -24,12 +24,12 @@ export function Transcript({ items, truncated }: TranscriptProps) {
     <div
       ref={containerRef}
       data-testid="transcript"
-      className="flex-1 overflow-y-auto font-mono text-sm p-4 space-y-1 min-h-0"
+      className="min-h-0 flex-1 space-y-1 overflow-y-auto bg-muted/20 p-4 font-mono text-sm"
     >
       {truncated && (
         <div
           data-testid="transcript-truncated-notice"
-          className="text-xs text-muted-foreground italic border-b border-border pb-1 mb-1"
+          className="mb-1 border-b border-border pb-1 text-xs italic text-muted-foreground"
         >
           Earlier output was omitted (backlog truncated).
         </div>
@@ -37,10 +37,10 @@ export function Transcript({ items, truncated }: TranscriptProps) {
       {items.map((item) => (
         <div key={`${item.seqStart}-${item.kind}`} data-testid="transcript-item" data-kind={item.kind} className={cn(
           'whitespace-pre-wrap break-words',
-          item.kind === 'step' && 'text-blue-600 font-semibold border-b border-blue-200 py-1 mt-2',
+          item.kind === 'step' && 'mt-2 border-b border-border py-1 font-semibold text-primary',
           item.kind === 'message' && 'text-foreground',
-          item.kind === 'log' && 'text-muted-foreground text-xs',
-          item.kind === 'status' && 'text-yellow-600 italic',
+          item.kind === 'log' && 'text-xs text-muted-foreground',
+          item.kind === 'status' && 'italic text-status-running',
         )}>
           {item.text}
         </div>

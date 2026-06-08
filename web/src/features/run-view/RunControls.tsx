@@ -1,6 +1,8 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { stopRun, retryStep } from '@/lib/api/client'
 import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { StatusBadge } from '@/components/status-badge'
 import type { RunStatus } from '@/lib/api/types'
 
 const TERMINAL_STATUSES: RunStatus[] = ['completed', 'failed', 'crashed', 'aborted']
@@ -36,39 +38,43 @@ export function RunControls({ runId, status, summary, closed = false }: RunContr
 
   return (
     <div className="flex flex-col gap-2 py-2">
-      <div className="flex gap-2 px-4">
-        <Button
-          data-testid="stop-button"
-          variant="destructive"
-          size="sm"
-          disabled={!canStop || stopMutation.isPending || closed}
-          onClick={() => stopMutation.mutate()}
-        >
-          Stop
-        </Button>
-        <Button
-          data-testid="retry-button"
-          variant="outline"
-          size="sm"
-          disabled={!canRetry || retryMutation.isPending || closed}
-          onClick={() => retryMutation.mutate()}
-        >
-          Retry step
-        </Button>
+      <div className="flex items-center gap-2 px-4">
+        {status !== null && <StatusBadge status={status} />}
+        <div className="ml-auto flex gap-2">
+          <Button
+            data-testid="stop-button"
+            variant="destructive"
+            size="sm"
+            disabled={!canStop || stopMutation.isPending || closed}
+            onClick={() => stopMutation.mutate()}
+          >
+            Stop
+          </Button>
+          <Button
+            data-testid="retry-button"
+            variant="outline"
+            size="sm"
+            disabled={!canRetry || retryMutation.isPending || closed}
+            onClick={() => retryMutation.mutate()}
+          >
+            Retry step
+          </Button>
+        </div>
       </div>
 
       {isTerminal && summary !== null && (
-        <div
-          data-testid="summary-panel"
-          className="mx-4 p-4 rounded-md border bg-muted/30"
-        >
-          <h3 className="font-semibold text-sm mb-2">Run Summary</h3>
-          <pre className="text-sm whitespace-pre-wrap break-words">
-            {typeof summary === 'string'
-              ? summary
-              : JSON.stringify(summary, null, 2)}
-          </pre>
-        </div>
+        <Card data-testid="summary-panel" className="mx-4 gap-3 py-4">
+          <CardHeader className="px-4">
+            <CardTitle className="text-sm">Run Summary</CardTitle>
+          </CardHeader>
+          <CardContent className="px-4">
+            <pre className="text-sm whitespace-pre-wrap break-words">
+              {typeof summary === 'string'
+                ? summary
+                : JSON.stringify(summary, null, 2)}
+            </pre>
+          </CardContent>
+        </Card>
       )}
 
       {stopMutation.isError && (

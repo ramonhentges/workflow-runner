@@ -6,6 +6,14 @@ import { startRun } from '@/lib/api/client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { useWorkflows } from './useWorkflows'
 
 export function StartRunForm() {
@@ -53,75 +61,82 @@ export function StartRunForm() {
   }
 
   return (
-    <form onSubmit={handleSubmit} className="flex flex-col gap-4 max-w-lg">
-      <h2 className="text-lg font-semibold">Start a Run</h2>
+    <Card className="max-w-lg">
+      <CardHeader>
+        <CardTitle>Start a Run</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+          {workflowsLoading && (
+            <p data-testid="workflows-loading" className="text-sm text-muted-foreground">
+              Loading workflows…
+            </p>
+          )}
 
-      {workflowsLoading && (
-        <p data-testid="workflows-loading" className="text-sm text-muted-foreground">
-          Loading workflows…
-        </p>
-      )}
+          {workflowsError && (
+            <p data-testid="workflows-error" className="text-sm text-destructive">
+              Could not load workflows — enter a path manually.
+            </p>
+          )}
 
-      {workflowsError && (
-        <p data-testid="workflows-error" className="text-sm text-destructive">
-          Could not load workflows — enter a path manually.
-        </p>
-      )}
+          {workflows.length > 0 && (
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="workflow-select">Workflow</Label>
+              <Select
+                value={selectedPath}
+                onValueChange={value => {
+                  setSelectedPath(value)
+                  setManualPath('')
+                  setValidationError('')
+                }}
+              >
+                <SelectTrigger id="workflow-select" className="w-full">
+                  <SelectValue placeholder="— select a workflow —" />
+                </SelectTrigger>
+                <SelectContent>
+                  {workflows.map(wf => (
+                    <SelectItem key={wf.path} value={wf.path}>
+                      {wf.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
 
-      {workflows.length > 0 && (
-        <div className="flex flex-col gap-1">
-          <Label htmlFor="workflow-select">Workflow</Label>
-          <select
-            id="workflow-select"
-            value={selectedPath}
-            onChange={e => {
-              setSelectedPath(e.target.value)
-              setManualPath('')
-              setValidationError('')
-            }}
-            className="border rounded px-3 py-2 text-sm bg-background"
-          >
-            <option value="">— select a workflow —</option>
-            {workflows.map(wf => (
-              <option key={wf.path} value={wf.path}>
-                {wf.name}
-              </option>
-            ))}
-          </select>
-        </div>
-      )}
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="manual-path-input">
+              {workflows.length > 0 ? 'Or enter a path manually' : 'Workflow path'}
+            </Label>
+            <Input
+              id="manual-path-input"
+              value={manualPath}
+              onChange={e => {
+                setManualPath(e.target.value)
+                setSelectedPath('')
+                setValidationError('')
+              }}
+              placeholder="/path/to/workflow.json"
+            />
+          </div>
 
-      <div className="flex flex-col gap-1">
-        <Label htmlFor="manual-path-input">
-          {workflows.length > 0 ? 'Or enter a path manually' : 'Workflow path'}
-        </Label>
-        <Input
-          id="manual-path-input"
-          value={manualPath}
-          onChange={e => {
-            setManualPath(e.target.value)
-            setSelectedPath('')
-            setValidationError('')
-          }}
-          placeholder="/path/to/workflow.json"
-        />
-      </div>
+          {validationError && (
+            <p data-testid="validation-error" className="text-sm text-destructive">
+              {validationError}
+            </p>
+          )}
 
-      {validationError && (
-        <p data-testid="validation-error" className="text-sm text-destructive">
-          {validationError}
-        </p>
-      )}
+          {mutation.isError && (
+            <p data-testid="submit-error" className="text-sm text-destructive">
+              {mutation.error instanceof Error ? mutation.error.message : 'Failed to start run.'}
+            </p>
+          )}
 
-      {mutation.isError && (
-        <p data-testid="submit-error" className="text-sm text-destructive">
-          {mutation.error instanceof Error ? mutation.error.message : 'Failed to start run.'}
-        </p>
-      )}
-
-      <Button type="submit" disabled={mutation.isPending}>
-        {mutation.isPending ? 'Starting…' : 'Start run'}
-      </Button>
-    </form>
+          <Button type="submit" disabled={mutation.isPending}>
+            {mutation.isPending ? 'Starting…' : 'Start run'}
+          </Button>
+        </form>
+      </CardContent>
+    </Card>
   )
 }

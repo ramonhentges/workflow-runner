@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { RouterProvider, createRouter, createMemoryHistory } from '@tanstack/react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -7,6 +7,7 @@ import { http, HttpResponse } from 'msw'
 import { server } from '../../test/setup'
 import { routeTree } from '../router'
 import { useCwdStore } from '@/stores/cwd-store'
+import { ThemeProvider } from '@/components/theme-provider'
 
 const BASE = 'http://127.0.0.1:4517'
 
@@ -61,9 +62,11 @@ function renderApp(initialPath = '/', qc?: QueryClient) {
   const testRouter = createRouter({ routeTree, history })
   return {
     ...render(
-      <QueryClientProvider client={queryClient}>
-        <RouterProvider router={testRouter} />
-      </QueryClientProvider>,
+      <ThemeProvider>
+        <QueryClientProvider client={queryClient}>
+          <RouterProvider router={testRouter} />
+        </QueryClientProvider>
+      </ThemeProvider>,
     ),
     queryClient,
     testRouter,
@@ -177,11 +180,74 @@ describe('app shell persistence', () => {
     renderApp('/')
     await screen.findByTestId('app-shell')
 
-    await user.type(screen.getByLabelText('Label'), 'My Project')
-    await user.type(screen.getByLabelText('Path'), '/home/user/project')
-    await user.click(screen.getByRole('button', { name: 'Add' }))
+    const [manageTrigger] = screen.getAllByRole('button', {
+      name: 'Manage working directories',
+    })
+    await user.click(manageTrigger)
+    const dialog = await screen.findByRole('dialog')
 
-    expect(await screen.findByRole('button', { name: 'My Project' })).toBeInTheDocument()
+    await user.type(within(dialog).getByLabelText('Label'), 'My Project')
+    await user.type(within(dialog).getByLabelText('Path'), '/home/user/project')
+    await user.click(within(dialog).getByRole('button', { name: 'Add' }))
+
+    // The new directory appears in the dialog list and becomes the active cwd.
+    expect(await within(dialog).findByText('My Project')).toBeInTheDocument()
+    const state = useCwdStore.getState()
+    expect(state.cwds).toHaveLength(1)
+    expect(state.activeCwdId).toBe(state.cwds[0].id)
+  })
+})
+
+// ─── Integration: index route status search param ────────────────────────────
+
+describe('index route status filter', () => {
+  beforeEach(() => {
+    useCwdStore.setState({
+      cwds: [{ id: 'cwd-1', label: 'MyApp', path: '/home/user/myapp' }],
+      activeCwdId: 'cwd-1',
+    })
+    server.use(
+      http.get(`${BASE}/runs`, () =>
+        HttpResponse.json({
+          runs: [
+            {
+              id: 'r-run',
+              slug: 's-run',
+              workflowPath: '/p/wf.json',
+              currentStepId: null,
+              status: 'running',
+              startedAt: 1_000_000,
+              endedAt: null,
+              attachedCount: 0,
+            },
+            {
+              id: 'r-fail',
+              slug: 's-fail',
+              workflowPath: '/p/wf.json',
+              currentStepId: null,
+              status: 'failed',
+              startedAt: 1_000_000,
+              endedAt: 1_001_000,
+              attachedCount: 0,
+            },
+          ],
+        }),
+      ),
+    )
+  })
+
+  test('?status=failed filters the dashboard to failed runs', async () => {
+    renderApp('/?status=failed')
+
+    await screen.findByTestId('run-row-r-fail')
+    expect(screen.queryByTestId('run-row-r-run')).not.toBeInTheDocument()
+  })
+
+  test('?status=bogus is coerced to no filter (all runs shown)', async () => {
+    renderApp('/?status=bogus')
+
+    await screen.findByTestId('run-row-r-run')
+    expect(screen.getByTestId('run-row-r-fail')).toBeInTheDocument()
   })
 })
 
@@ -216,9 +282,10 @@ describe('full operate loop', () => {
     // Navigate to /start via the shell nav link
     await user.click(screen.getByRole('link', { name: 'Start Run' }))
 
-    // StartRunForm: wait for workflow picker to load
-    const workflowSelect = await screen.findByLabelText('Workflow')
-    await user.selectOptions(workflowSelect, '/home/user/myapp/workflows/who-is.json')
+    // StartRunForm: wait for the shadcn Select trigger, open it, pick the option
+    const workflowSelect = await screen.findByRole('combobox', { name: 'Workflow' })
+    await user.click(workflowSelect)
+    await user.click(await screen.findByRole('option', { name: 'who-is' }))
 
     // Submit → POST /runs → navigate to /runs/<runId>
     await user.click(screen.getByRole('button', { name: 'Start run' }))

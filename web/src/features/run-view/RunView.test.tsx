@@ -608,7 +608,7 @@ describe('RunView integration (fake WebSocket + MSW)', () => {
     expect(screen.getByText('Some output before error')).toBeInTheDocument()
   })
 
-  test('socket close renders a closed notice without unmounting the transcript', async () => {
+  test('socket close on a terminal run renders a closed notice without unmounting the transcript', async () => {
     renderRunView('run-close-int')
     const ws = latestWs()
 
@@ -626,6 +626,11 @@ describe('RunView integration (fake WebSocket + MSW)', () => {
 
     expect(await screen.findByText('Log entry before close')).toBeInTheDocument()
 
+    // A terminal status means the server closed normally — no reconnect, so the
+    // closed notice surfaces.
+    act(() => {
+      ws.receive({ type: 'status', status: 'completed' })
+    })
     act(() => {
       ws.close()
     })
@@ -641,7 +646,7 @@ describe('RunView integration (fake WebSocket + MSW)', () => {
     expect(screen.getByText('Log entry before close')).toBeInTheDocument()
   })
 
-  test('input is disabled when socket closes while interactive is enabled', async () => {
+  test('input stays enabled across a transient socket close (auto-reconnect) on a running interactive run', async () => {
     renderRunView('run-input-close')
     const ws = latestWs()
 
@@ -665,14 +670,14 @@ describe('RunView integration (fake WebSocket + MSW)', () => {
       expect(screen.getByRole('textbox', { name: 'Message' })).not.toBeDisabled()
     })
 
+    // A drop while the run is still running triggers a silent reconnect — the
+    // bar must NOT be disabled and no closed notice should appear.
     act(() => {
       ws.close()
     })
 
-    await waitFor(() => {
-      expect(screen.getByRole('textbox', { name: 'Message' })).toBeDisabled()
-    })
-    expect(screen.getByTestId('socket-closed-notice')).toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: 'Message' })).not.toBeDisabled()
+    expect(screen.queryByTestId('socket-closed-notice')).not.toBeInTheDocument()
   })
 
   test('input is disabled when run reaches terminal status while interactive is enabled', async () => {
@@ -708,10 +713,15 @@ describe('RunView integration (fake WebSocket + MSW)', () => {
     })
   })
 
-  test('WebSocket error event triggers closed notice without crashing', async () => {
+  test('WebSocket error event on a terminal run triggers closed notice without crashing', async () => {
     renderRunView('run-wserr-int')
     const ws = latestWs()
 
+    // Terminal status → the error/close is final (no reconnect) and surfaces the
+    // closed notice.
+    act(() => {
+      ws.receive({ type: 'status', status: 'completed' })
+    })
     act(() => {
       ws.triggerError()
     })
@@ -722,7 +732,7 @@ describe('RunView integration (fake WebSocket + MSW)', () => {
     expect(screen.getByTestId('run-view')).toBeInTheDocument()
   })
 
-  test('Stop and Retry buttons are disabled when socket closes while run is "running"', async () => {
+  test('Stop and Retry buttons stay enabled across a transient socket close (auto-reconnect) while running', async () => {
     renderRunView('run-controls-close')
     const ws = latestWs()
 
@@ -734,14 +744,13 @@ describe('RunView integration (fake WebSocket + MSW)', () => {
       expect(screen.getByTestId('stop-button')).not.toBeDisabled()
     })
 
+    // A drop while running reconnects silently — controls remain live.
     act(() => {
       ws.close()
     })
 
-    await waitFor(() => {
-      expect(screen.getByTestId('socket-closed-notice')).toBeInTheDocument()
-    })
-    expect(screen.getByTestId('stop-button')).toBeDisabled()
+    expect(screen.getByTestId('stop-button')).not.toBeDisabled()
+    expect(screen.queryByTestId('socket-closed-notice')).not.toBeInTheDocument()
   })
 
   test('Retry button is disabled when socket closes while status is "failed"', async () => {

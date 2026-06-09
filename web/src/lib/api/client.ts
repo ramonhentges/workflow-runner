@@ -134,6 +134,21 @@ export async function retryStep(id: string): Promise<{ resumedStepId: string }> 
 
 export const RunStatusSchema = z.enum(['running', 'completed', 'failed', 'crashed', 'aborted'])
 
+// The four tool-call lifecycle statuses, mirroring the server `ToolCallStatus`
+// (src/domain/runner.ts). A value outside this set fails parse and the event is
+// dropped (ADR-003 schema-drift mitigation).
+export const ToolCallStatusSchema = z.enum(['pending', 'in_progress', 'completed', 'failed'])
+
+// Mirrors the server `ToolCallView` (src/domain/runner.ts) field-for-field:
+// the precomputed, display-ready view shipped inside a `tool_call` event.
+export const ToolCallViewSchema = z.object({
+  toolCallId: z.string(),
+  status: ToolCallStatusSchema,
+  kind: z.string(),
+  title: z.string(),
+  errorText: z.string().optional(),
+})
+
 export const RunnerEventSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('banner'),
@@ -149,6 +164,7 @@ export const RunnerEventSchema = z.discriminatedUnion('type', [
   }),
   z.object({ type: z.literal('interactive'), enabled: z.boolean() }),
   z.object({ type: z.literal('status'), text: z.string(), color: z.string().optional() }),
+  z.object({ type: z.literal('tool_call'), call: ToolCallViewSchema }),
   z.object({ type: z.literal('summary'), summary: z.unknown() }),
 ])
 

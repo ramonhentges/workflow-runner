@@ -34,6 +34,7 @@ function makeArgs(step: Step): RunnerAgentSessionArgs {
     log: () => {},
     stream: () => {},
     status: () => {},
+    toolCall: () => {},
   };
   return { step, cwd: "/tmp", tools, inboundMessage: null, sink };
 }

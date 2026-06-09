@@ -1,13 +1,18 @@
 import { RunnerEventSchema } from '../api/client'
-import type { AttachFrame, RunDetail, RunStatus } from '../api/types'
+import type { AttachFrame, RunDetail, RunStatus, ToolCallStatus } from '../api/types'
 
 export interface TranscriptItem {
-  kind: 'step' | 'message' | 'log' | 'status'
+  kind: 'step' | 'message' | 'log' | 'status' | 'tool_call'
   stepId: string | null
   text: string
   seqStart: number
   seqEnd: number
   streamKind?: string
+  // Tool-call fields, set only when kind === 'tool_call'. `text` holds the title;
+  // the row is folded by `toolCallId` (ADR-002, last-wins).
+  toolCallId?: string
+  status?: ToolCallStatus
+  errorText?: string
 }
 
 export interface RunViewModel {
@@ -21,6 +26,11 @@ export interface RunViewModel {
   closed: boolean
   backlogTruncated: boolean
   appliedSeqs: Set<number>
+  // Maps a (stepId, toolCallId) key to the index of its row in `transcript`,
+  // giving the tool-call fold an O(1) lookup instead of an O(n) scan per update
+  // (mirrors the TUI's `Map<toolCallId, entry>`). Rows are only ever appended or
+  // replaced in place, so stored indices never go stale.
+  toolCallIndex: Map<string, number>
 }
 
 export const initialViewModel: RunViewModel = {
@@ -34,6 +44,7 @@ export const initialViewModel: RunViewModel = {
   closed: false,
   backlogTruncated: false,
   appliedSeqs: new Set(),
+  toolCallIndex: new Map(),
 }
 
 export function reduceFrame(vm: RunViewModel, frame: AttachFrame): RunViewModel {
@@ -64,6 +75,14 @@ export function reduceFrame(vm: RunViewModel, frame: AttachFrame): RunViewModel 
     default:
       return vm
   }
+}
+
+// Composite key for the tool-call index. JSON encoding keeps the two segments
+// unambiguous — a null stepId and the literal string "null" (or any delimiter
+// char a stepId/toolCallId might contain) all serialize distinctly — so no pair
+// can alias another, exactly matching the previous findIndex equality check.
+function toolCallKey(stepId: string | null, toolCallId: string): string {
+  return JSON.stringify([stepId, toolCallId])
 }
 
 function reduceEntry(
@@ -150,6 +169,51 @@ function reduceEntry(
           { kind: 'status', stepId, text: event.text, seqStart: seq, seqEnd: seq },
         ],
       }
+    case 'tool_call': {
+      const { call } = event
+      // Scope the fold to the current step, mirroring the TUI which clears its
+      // tool-call map on each banner. Tool-call ids are unique per session
+      // (per step), not per run; several adapters restart sequential ids
+      // (`call_0`, `call_1`, …) each session, so a reused id in a later step
+      // must start a new row rather than mutating the earlier step's line. The
+      // (stepId, toolCallId) key makes the lookup O(1) and step-scoped at once.
+      const key = toolCallKey(stepId, call.toolCallId)
+      const idx = vm.toolCallIndex.get(key)
+      // First event for this id: append a new row at the end (first-seen position)
+      // and record its index so later updates skip the scan.
+      if (idx === undefined) {
+        const nextIndex = new Map(vm.toolCallIndex)
+        nextIndex.set(key, vm.transcript.length)
+        return {
+          ...vm,
+          appliedSeqs: addSeq(),
+          toolCallIndex: nextIndex,
+          transcript: [
+            ...vm.transcript,
+            {
+              kind: 'tool_call',
+              stepId,
+              text: call.title,
+              seqStart: seq,
+              seqEnd: seq,
+              toolCallId: call.toolCallId,
+              status: call.status,
+              errorText: call.errorText,
+            },
+          ],
+        }
+      }
+      // Later event: replace the existing row in place, keeping seqStart/position.
+      const transcript = vm.transcript.slice()
+      transcript[idx] = {
+        ...transcript[idx],
+        text: call.title,
+        status: call.status,
+        errorText: call.errorText,
+        seqEnd: seq,
+      }
+      return { ...vm, appliedSeqs: addSeq(), transcript }
+    }
     case 'summary':
       return { ...vm, appliedSeqs: addSeq(), summary: event.summary }
     default:

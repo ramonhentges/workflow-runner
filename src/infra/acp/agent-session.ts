@@ -14,15 +14,54 @@ import type {
 import type { Step } from "../../domain/workflow.js";
 import type { StepOutcome } from "../../domain/outcome.js";
 import { asSessionId, type SessionId, type StepToken } from "../../domain/ids.js";
-import type { RunnerAgentSessionFactory } from "../../domain/runner.js";
+import type {
+  RunnerAgentSessionFactory,
+  ToolCallView,
+} from "../../domain/runner.js";
 import { AcpClient } from "./acp-client.js";
 import type { IdeProfile } from "./ide-profile.js";
 import { resolveIdeProfile } from "./ide-profiles.js";
+import { ToolCallAccumulator } from "./tool-call-accumulator.js";
 
 export interface AgentSessionSink {
   log(message: string, color?: string): void;
   stream(kind: "message" | "thought", chunk: string, color?: string): void;
   status(text: string, color?: string): void;
+  toolCall(view: ToolCallView): void;
+}
+
+/**
+ * Route one ACP session update to the sink: message/thought chunks stream as
+ * text, while `tool_call`/`tool_call_update` notifications are folded through
+ * the per-session {@link ToolCallAccumulator} and emitted as a complete
+ * {@link ToolCallView}. Other update kinds are ignored. Extracted from the
+ * `sessionUpdate` handler so the routing is unit-testable without a subprocess.
+ */
+export function handleSessionUpdate(
+  update: SessionNotification["update"],
+  cwd: string,
+  sink: AgentSessionSink,
+  toolCalls: ToolCallAccumulator,
+): void {
+  switch (update.sessionUpdate) {
+    case "agent_message_chunk": {
+      const text =
+        update.content.type === "text"
+          ? update.content.text
+          : `[${update.content.type}]`;
+      sink.stream("message", text);
+      break;
+    }
+    case "agent_thought_chunk":
+      if (update.content.type === "text") {
+        sink.stream("thought", update.content.text);
+      }
+      break;
+    case "tool_call":
+    case "tool_call_update":
+      sink.toolCall(toolCalls.apply(update, cwd));
+      break;
+  }
 }
 
 export interface AgentSessionTools {
@@ -150,6 +189,10 @@ export class AgentSession {
       ) as ReadableStream<Uint8Array>;
       const stream = ndJsonStream(writable, readable);
 
+      // Folds the session's ACP tool-call updates into complete views; scoped
+      // to this session and discarded when it ends (ids are unique per session).
+      const toolCalls = new ToolCallAccumulator();
+
       const acpClient = new AcpClient({
         log: (msg, color) => sink.log(msg, color),
         requestPermission: async (
@@ -176,28 +219,7 @@ export class AgentSession {
           return { outcome: { outcome: "cancelled" } };
         },
         sessionUpdate: async (params: SessionNotification): Promise<void> => {
-          const update = params.update;
-          switch (update.sessionUpdate) {
-            case "agent_message_chunk": {
-              const text =
-                update.content.type === "text"
-                  ? update.content.text
-                  : `[${update.content.type}]`;
-              sink.stream("message", text);
-              break;
-            }
-            case "agent_thought_chunk":
-              if (update.content.type === "text") {
-                sink.stream("thought", update.content.text);
-              }
-              break;
-            case "tool_call":
-              sink.log(`Tool: ${update.title} (${update.status})`);
-              break;
-            case "tool_call_update":
-              sink.log(`Tool: ${update.toolCallId}: ${update.status}`);
-              break;
-          }
+          handleSessionUpdate(params.update, cwd, sink, toolCalls);
         },
         writeTextFile: async (
           params: WriteTextFileRequest,

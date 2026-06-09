@@ -524,6 +524,28 @@ describe('AttachFrameSchema', () => {
     expect(result.success).toBe(true)
   })
 
+  test('parses an event frame wrapping a valid tool_call entry end to end', () => {
+    const frame = {
+      type: 'event',
+      entry: {
+        seq: 2,
+        ts: 2000,
+        stepId: 'step-1',
+        event: {
+          type: 'tool_call',
+          call: {
+            toolCallId: 'call_00_abc',
+            status: 'in_progress',
+            kind: 'read',
+            title: 'Read src/index.ts',
+          },
+        },
+      },
+    }
+    const result = AttachFrameSchema.safeParse(frame)
+    expect(result.success).toBe(true)
+  })
+
   test('parses status frame', () => {
     const result = AttachFrameSchema.safeParse({ type: 'status', status: 'completed' })
     expect(result.success).toBe(true)
@@ -566,6 +588,52 @@ describe('RunnerEventSchema', () => {
 
   test('rejects unknown event type', () => {
     const result = RunnerEventSchema.safeParse({ type: 'unknown' })
+    expect(result.success).toBe(false)
+  })
+
+  // Pinned tool_call fixture — guards against silent web/server schema drift
+  // (ADR-003). Mirrors the server `ToolCallView` shape field-for-field.
+  function makeToolCallEvent(call: Record<string, unknown> = {}) {
+    return {
+      type: 'tool_call',
+      call: {
+        toolCallId: 'call_00_abc',
+        status: 'completed',
+        kind: 'execute',
+        title: 'Bash: npm test',
+        errorText: 'exit code 1',
+        ...call,
+      },
+    }
+  }
+
+  test('parses a valid tool_call event and resolves the discriminated type', () => {
+    const result = RunnerEventSchema.safeParse(makeToolCallEvent())
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data.type).toBe('tool_call')
+      // discriminated union narrows; the call payload is fully typed
+      if (result.data.type === 'tool_call') {
+        expect(result.data.call.toolCallId).toBe('call_00_abc')
+        expect(result.data.call.status).toBe('completed')
+      }
+    }
+  })
+
+  test('errorText is optional: a completed event without it parses', () => {
+    const result = RunnerEventSchema.safeParse(
+      makeToolCallEvent({ status: 'completed', errorText: undefined }),
+    )
+    expect(result.success).toBe(true)
+  })
+
+  test('rejects a tool_call with status outside the enum', () => {
+    const result = RunnerEventSchema.safeParse(makeToolCallEvent({ status: 'cancelled' }))
+    expect(result.success).toBe(false)
+  })
+
+  test('drops a tool_call missing toolCallId (fails parse, no throw)', () => {
+    const result = RunnerEventSchema.safeParse(makeToolCallEvent({ toolCallId: undefined }))
     expect(result.success).toBe(false)
   })
 })

@@ -15,12 +15,25 @@ export function parseStatus(value: unknown): RunStatus | undefined {
     : undefined
 }
 
+// Mirrors the server `ToolCallStatus`/`ToolCallView` (src/domain/runner.ts).
+// Display fields only — the precomputed view shipped inside a `tool_call` event.
+export type ToolCallStatus = 'pending' | 'in_progress' | 'completed' | 'failed'
+
+export interface ToolCallView {
+  toolCallId: string
+  status: ToolCallStatus
+  kind: string
+  title: string
+  errorText?: string
+}
+
 export type RunnerEvent =
   | { type: 'banner'; step: { id: string }; index: number }
   | { type: 'log'; message: string; color?: string }
   | { type: 'stream'; kind: string; chunk: string; color?: string }
   | { type: 'interactive'; enabled: boolean }
   | { type: 'status'; text: string; color?: string }
+  | { type: 'tool_call'; call: ToolCallView }
   | { type: 'summary'; summary: unknown }
 
 export interface RunEvent {

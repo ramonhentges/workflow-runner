@@ -2,12 +2,16 @@ import { expect, describe, it } from "bun:test";
 import { Runner, formatRunSummary } from "./runner.js";
 import type {
   RunSummary,
+  RunnerEvent,
   RunnerObserver,
   RunnerAgentSession,
   RunnerAgentSessionArgs,
   RunnerAgentSessionFactory,
+  RunnerSessionSink,
   RunnerTools,
+  ToolCallView,
 } from "./runner.js";
+import type { AgentSessionSink } from "../infra/acp/agent-session.js";
 import type { StepOutcome } from "./outcome.js";
 import { Workflow } from "./workflow.js";
 import { asStepId, asStepToken, type StepId } from "./ids.js";
@@ -665,5 +669,93 @@ describe("Runner.run orchestration", () => {
     expect(summary.failure?.failedStep).toBe(sid("step-1"));
     expect(summary.failure?.reason).toContain("async persist failed");
     expect(summary.visited).toEqual([]);
+  });
+});
+
+describe("Runner tool_call emission", () => {
+  it("emits exactly one tool_call event carrying the view passed to sink.toolCall", async () => {
+    const view: ToolCallView = {
+      toolCallId: "call-1",
+      status: "completed",
+      kind: "execute",
+      title: "Bash: npm test",
+    };
+    const workflow = makeWorkflow([stepShape("step-1")]);
+    const factory = makeFakeSessionFactory({
+      onCreate: (args) => args.sink.toolCall(view),
+      resolveOutcome: () => ({ kind: "finish", message: "ok" }),
+    });
+
+    const toolCalls: ToolCallView[] = [];
+    const observer: RunnerObserver = {
+      onEvent: (e) => {
+        if (e.type === "tool_call") toolCalls.push(e.call);
+      },
+    };
+
+    const runner = new Runner(workflow, factory, makeTools(), { cwd: "/tmp" });
+    runner.addObserver(observer);
+    await runner.run(sid("step-1"));
+
+    expect(toolCalls).toHaveLength(1);
+    expect(toolCalls[0]).toEqual(view);
+  });
+
+  it("preserves errorText on a failed tool_call event", async () => {
+    const view: ToolCallView = {
+      toolCallId: "call-2",
+      status: "failed",
+      kind: "execute",
+      title: "Bash: false",
+      errorText: "exit code 1",
+    };
+    const workflow = makeWorkflow([stepShape("step-1")]);
+    const factory = makeFakeSessionFactory({
+      onCreate: (args) => args.sink.toolCall(view),
+      resolveOutcome: () => ({ kind: "finish", message: "ok" }),
+    });
+
+    let received: ToolCallView | null = null;
+    const runner = new Runner(workflow, factory, makeTools(), { cwd: "/tmp" });
+    runner.addObserver({
+      onEvent: (e) => {
+        if (e.type === "tool_call") received = e.call;
+      },
+    });
+    await runner.run(sid("step-1"));
+
+    expect(received).not.toBeNull();
+    expect(received!.status).toBe("failed");
+    expect(received!.errorText).toBe("exit code 1");
+  });
+
+  it("keeps RunnerSessionSink structurally compatible with AgentSessionSink", () => {
+    const events: RunnerEvent[] = [];
+    const runnerSink: RunnerSessionSink = {
+      log: () => {},
+      stream: () => {},
+      status: () => {},
+      toolCall: (view) => events.push({ type: "tool_call", call: view }),
+    };
+    // A RunnerSessionSink (with toolCall) is accepted where an
+    // AgentSessionSink is expected: extra members do not break assignment.
+    const agentSink: AgentSessionSink = runnerSink;
+    agentSink.log("hello");
+    runnerSink.toolCall({
+      toolCallId: "call-3",
+      status: "pending",
+      kind: "other",
+      title: "Tool call",
+    });
+    expect(events).toHaveLength(1);
+    expect(events[0]).toEqual({
+      type: "tool_call",
+      call: {
+        toolCallId: "call-3",
+        status: "pending",
+        kind: "other",
+        title: "Tool call",
+      },
+    });
   });
 });

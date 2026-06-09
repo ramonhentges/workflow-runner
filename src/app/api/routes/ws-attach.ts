@@ -10,8 +10,8 @@ import { RpcErrorCode } from "../../../infra/daemon/protocol.js";
 import type { EventLogEntry } from "../../../infra/daemon/event-log.js";
 import {
   AttachFrameSchema,
+  ClientFrameSchema,
   EventsQuerySchema,
-  InputFrameSchema,
   type AttachFrame,
 } from "../schema.js";
 import { isOriginAllowed } from "../security.js";
@@ -486,13 +486,19 @@ export function createPerConnectionState(
         return;
       }
 
-      const result = InputFrameSchema.safeParse(parsed);
+      const result = ClientFrameSchema.safeParse(parsed);
       if (!result.success) {
         sendFrame({
           type: "error",
           code: "INVALID_FRAME",
-          message: "Expected {type:'input',message:string(min 1)}",
+          message: "Expected {type:'input',message:string(min 1)} or {type:'ping'}",
         });
+        return;
+      }
+
+      // Heartbeat: resetIdleTimer() already ran above, so the only job here is to
+      // keep the connection alive without doing any run work or echoing a frame.
+      if (result.data.type === "ping") {
         return;
       }
 

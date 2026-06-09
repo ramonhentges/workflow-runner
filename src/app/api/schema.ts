@@ -62,12 +62,26 @@ export const AttachFrameSchema = z.discriminatedUnion("type", [
 ]);
 export type AttachFrame = z.infer<typeof AttachFrameSchema>;
 
-// Client → server WebSocket frame.
+// Client → server WebSocket frames.
 export const InputFrameSchema = z.object({
   type: z.literal("input"),
   message: z.string().min(1),
 });
 export type InputFrame = z.infer<typeof InputFrameSchema>;
+
+// Heartbeat frame: a live client sends these periodically so the server's idle
+// timer (which closes quiet connections) does not reap a healthy interactive
+// session while the user is reading or thinking. Carries no payload.
+export const PingFrameSchema = z.object({
+  type: z.literal("ping"),
+});
+export type PingFrame = z.infer<typeof PingFrameSchema>;
+
+export const ClientFrameSchema = z.discriminatedUnion("type", [
+  InputFrameSchema,
+  PingFrameSchema,
+]);
+export type ClientFrame = z.infer<typeof ClientFrameSchema>;
 
 export const StartRunRequestSchema = z.object({
   workflowPath: z.string().min(1),

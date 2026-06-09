@@ -12,14 +12,53 @@ import type {
   RunnerEvent,
   RunSummary,
   StreamKind,
+  ToolCallView,
 } from "../../domain/runner.js";
 import { formatRunSummary } from "../../domain/runner.js";
 import type { TuiEventSource } from "./event-source.js";
 import { C } from "./theme.js";
+import {
+  SPINNER_FRAMES,
+  formatToolCallContent,
+  toolCallColor,
+} from "./tool-call-format.js";
 
 type Renderer = CliRenderer;
 
 const DETACH_BANNER = "run still alive — `attach` to return";
+
+// Spinner cadence: a frame advances every ~100ms, but the animation only
+// starts after a ~200ms appearance delay so fast calls settle straight to ✓/✗
+// without ever flashing a braille frame.
+const SPINNER_FRAME_MS = 100;
+const SPINNER_DELAY_MS = 200;
+
+/** Opaque timer handle; matches whatever the platform timers return. */
+export type TimerHandle = ReturnType<typeof setInterval>;
+
+/**
+ * Minimal timer surface used by the tool-call spinner. Injectable via
+ * `Tui.create` so tests can drive the appearance delay and frame interval with
+ * a fake clock instead of real time.
+ */
+export interface TuiClock {
+  setTimeout(fn: () => void, ms: number): TimerHandle;
+  clearTimeout(handle: TimerHandle): void;
+  setInterval(fn: () => void, ms: number): TimerHandle;
+  clearInterval(handle: TimerHandle): void;
+}
+
+const realClock: TuiClock = {
+  setTimeout: (fn, ms) => setTimeout(fn, ms),
+  clearTimeout: (handle) => clearTimeout(handle),
+  setInterval: (fn, ms) => setInterval(fn, ms),
+  clearInterval: (handle) => clearInterval(handle),
+};
+
+interface ToolCallEntry {
+  el: TextRenderable;
+  view: ToolCallView;
+}
 
 export interface TuiHooks {
   exit?: (code: number) => void;
@@ -42,6 +81,13 @@ export class Tui {
   #shutdownInProgress = false;
   #rendererDestroyed = false;
 
+  // Fold-by-id tool-call lifecycle: one self-updating renderable per call.
+  #toolCalls = new Map<string, ToolCallEntry>();
+  #clock: TuiClock;
+  #spinnerFrame = 0;
+  #spinnerInterval: TimerHandle | null = null;
+  #spinnerDelay: TimerHandle | null = null;
+
   private constructor(init: {
     renderer: Renderer;
     statusText: TextRenderable;
@@ -49,6 +95,7 @@ export class Tui {
     inputField: InputRenderable;
     inputBar: BoxRenderable;
     hooks: TuiHooks;
+    clock: TuiClock;
   }) {
     this.#renderer = init.renderer;
     this.#statusText = init.statusText;
@@ -56,10 +103,11 @@ export class Tui {
     this.#inputField = init.inputField;
     this.#inputBar = init.inputBar;
     this.#hooks = init.hooks;
+    this.#clock = init.clock;
   }
 
   static async create(
-    opts: { hooks?: TuiHooks; renderer?: Renderer } = {},
+    opts: { hooks?: TuiHooks; renderer?: Renderer; clock?: TuiClock } = {},
   ): Promise<Tui> {
     const renderer =
       opts.renderer ??
@@ -145,6 +193,7 @@ export class Tui {
       inputField,
       inputBar,
       hooks: opts.hooks ?? {},
+      clock: opts.clock ?? realClock,
     });
   }
 
@@ -181,6 +230,8 @@ export class Tui {
   }
 
   detach(): void {
+    this.stopSpinner();
+    this.#toolCalls.clear();
     for (const fn of this.#detachListeners) {
       try {
         fn();
@@ -203,6 +254,9 @@ export class Tui {
   onEvent(event: RunnerEvent): void {
     switch (event.type) {
       case "banner":
+        // New step: drop the previous step's tool-call entries (their lines
+        // stay in the scroll history) and stop any spinner that was running.
+        this.clearToolCalls();
         this.renderBanner(event.step.id, event.index, event.step);
         break;
       case "log":
@@ -210,6 +264,9 @@ export class Tui {
         break;
       case "stream":
         this.appendStream(event.kind, event.chunk, event.color);
+        break;
+      case "tool_call":
+        this.renderToolCall(event.call);
         break;
       case "interactive":
         this.setInteractive(event.enabled);
@@ -324,6 +381,94 @@ export class Tui {
       });
       this.#logScroll.add(text);
       this.#streamedEl = { el: text, kind, text: chunk };
+    }
+  }
+
+  private renderToolCall(view: ToolCallView): void {
+    const existing = this.#toolCalls.get(view.toolCallId);
+    // Only borrow a live spinner frame while the shared interval is actually
+    // running; otherwise the line shows the static affordance and a fast call
+    // settles straight to ✓/✗ without flashing a frame.
+    const frame =
+      this.#spinnerInterval !== null && view.status === "in_progress"
+        ? SPINNER_FRAMES[this.#spinnerFrame]
+        : undefined;
+    const content = formatToolCallContent(view, frame);
+    const color = toolCallColor(view.status);
+
+    if (existing) {
+      existing.view = view;
+      existing.el.content = content;
+      existing.el.fg = color;
+    } else {
+      this.flushStream();
+      const el = new TextRenderable(this.#renderer, {
+        id: `msg-${++this.#msgCounter}`,
+        content,
+        fg: color,
+        selectable: true,
+      });
+      this.#logScroll.add(el);
+      this.#toolCalls.set(view.toolCallId, { el, view });
+    }
+
+    if (view.status === "in_progress") this.ensureSpinner();
+  }
+
+  private ensureSpinner(): void {
+    if (this.#spinnerInterval !== null || this.#spinnerDelay !== null) return;
+    this.#spinnerDelay = this.#clock.setTimeout(() => {
+      this.#spinnerDelay = null;
+      this.startSpinnerInterval();
+    }, SPINNER_DELAY_MS);
+  }
+
+  private startSpinnerInterval(): void {
+    if (this.#spinnerInterval !== null) return;
+    if (!this.hasInProgress()) return;
+    this.#spinnerInterval = this.#clock.setInterval(() => {
+      this.advanceSpinner();
+    }, SPINNER_FRAME_MS);
+  }
+
+  private advanceSpinner(): void {
+    if (!this.hasInProgress()) {
+      this.stopSpinnerInterval();
+      return;
+    }
+    this.#spinnerFrame = (this.#spinnerFrame + 1) % SPINNER_FRAMES.length;
+    const frame = SPINNER_FRAMES[this.#spinnerFrame];
+    for (const entry of this.#toolCalls.values()) {
+      if (entry.view.status === "in_progress") {
+        entry.el.content = formatToolCallContent(entry.view, frame);
+      }
+    }
+  }
+
+  private hasInProgress(): boolean {
+    for (const entry of this.#toolCalls.values()) {
+      if (entry.view.status === "in_progress") return true;
+    }
+    return false;
+  }
+
+  private clearToolCalls(): void {
+    this.stopSpinner();
+    this.#toolCalls.clear();
+  }
+
+  private stopSpinner(): void {
+    if (this.#spinnerDelay !== null) {
+      this.#clock.clearTimeout(this.#spinnerDelay);
+      this.#spinnerDelay = null;
+    }
+    this.stopSpinnerInterval();
+  }
+
+  private stopSpinnerInterval(): void {
+    if (this.#spinnerInterval !== null) {
+      this.#clock.clearInterval(this.#spinnerInterval);
+      this.#spinnerInterval = null;
     }
   }
 

@@ -3,10 +3,17 @@ import { createTestRenderer } from "@opentui/core/testing";
 import type { TestRenderer, MockInput } from "@opentui/core/testing";
 
 import { Tui } from "./tui.js";
+import type { TimerHandle, TuiClock } from "./tui.js";
 import type { TuiEventSource } from "./event-source.js";
-import type { RunnerEvent, RunSummary } from "../../domain/runner.js";
+import type {
+  RunnerEvent,
+  RunSummary,
+  ToolCallStatus,
+  ToolCallView,
+} from "../../domain/runner.js";
 import { asStepId } from "../../domain/ids.js";
 import type { Step } from "../../domain/workflow.js";
+import { SPINNER_FRAMES } from "./tool-call-format.js";
 
 const sid = asStepId;
 
@@ -295,6 +302,241 @@ describe("Tui.submitInput", () => {
 
     expect(hooks.banners.length).toBe(1);
     expect(hooks.exits.length).toBe(1);
+  });
+});
+
+interface FakeClock {
+  clock: TuiClock;
+  cleared: { timeouts: number; intervals: number };
+  fireTimeouts(): void;
+  tickIntervals(): void;
+  activeTimeouts(): number;
+  activeIntervals(): number;
+}
+
+function makeFakeClock(): FakeClock {
+  let nextId = 1;
+  const timeouts = new Map<number, () => void>();
+  const intervals = new Map<number, () => void>();
+  const cleared = { timeouts: 0, intervals: 0 };
+  const asHandle = (id: number) => id as unknown as TimerHandle;
+  const asId = (handle: TimerHandle) => handle as unknown as number;
+
+  return {
+    cleared,
+    clock: {
+      setTimeout(fn) {
+        const id = nextId++;
+        timeouts.set(id, fn);
+        return asHandle(id);
+      },
+      clearTimeout(handle) {
+        if (timeouts.delete(asId(handle))) cleared.timeouts++;
+      },
+      setInterval(fn) {
+        const id = nextId++;
+        intervals.set(id, fn);
+        return asHandle(id);
+      },
+      clearInterval(handle) {
+        if (intervals.delete(asId(handle))) cleared.intervals++;
+      },
+    },
+    fireTimeouts() {
+      for (const [id, fn] of [...timeouts]) {
+        timeouts.delete(id);
+        fn();
+      }
+    },
+    tickIntervals() {
+      for (const fn of [...intervals.values()]) fn();
+    },
+    activeTimeouts() {
+      return timeouts.size;
+    },
+    activeIntervals() {
+      return intervals.size;
+    },
+  };
+}
+
+function toolCallEvent(
+  toolCallId: string,
+  status: ToolCallStatus,
+  title: string,
+  errorText?: string,
+): RunnerEvent {
+  const call: ToolCallView = {
+    toolCallId,
+    status,
+    kind: "execute",
+    title,
+    ...(errorText !== undefined ? { errorText } : {}),
+  };
+  return { type: "tool_call", call };
+}
+
+const occurrences = (haystack: string, needle: string) =>
+  haystack.split(needle).length - 1;
+
+describe("Tui tool_call rendering", () => {
+  let renderer: TestRenderer;
+  let renderOnce: () => Promise<void>;
+  let captureCharFrame: () => string;
+
+  beforeEach(async () => {
+    const created = await createTestRenderer({ width: 80, height: 24 });
+    renderer = created.renderer;
+    renderOnce = created.renderOnce;
+    captureCharFrame = created.captureCharFrame;
+  });
+
+  afterEach(() => {
+    try {
+      renderer.destroy();
+    } catch {
+      // ignore
+    }
+  });
+
+  async function makeAttached(clock: TuiClock) {
+    const tui = await Tui.create({
+      renderer,
+      hooks: { exit: () => {}, writeBanner: () => {} },
+      clock,
+    });
+    const source = makeFakeSource();
+    tui.attachSource(source);
+    return { tui, source };
+  }
+
+  it("folds pending→in_progress→completed for one id into a single completed line", async () => {
+    const fc = makeFakeClock();
+    const { source } = await makeAttached(fc.clock);
+
+    source.emit(toolCallEvent("tc-1", "pending", "Bash: npm test"));
+    source.emit(toolCallEvent("tc-1", "in_progress", "Bash: npm test"));
+    source.emit(toolCallEvent("tc-1", "completed", "Bash: npm test"));
+    await renderOnce();
+
+    const frame = captureCharFrame();
+    // One tracked renderable, mutated in place — the title appears exactly once.
+    expect(occurrences(frame, "Bash: npm test")).toBe(1);
+    expect(frame).toContain("✓ Bash: npm test");
+  });
+
+  it("renders a failed call with its error suffix", async () => {
+    const fc = makeFakeClock();
+    const { source } = await makeAttached(fc.clock);
+
+    source.emit(toolCallEvent("tc-1", "failed", "Bash: npm test", "exit code 1"));
+    await renderOnce();
+
+    expect(captureCharFrame()).toContain("✗ Bash: npm test — exit code 1");
+  });
+
+  it("clears the tool-call map on banner so a re-seen id creates a new line", async () => {
+    const fc = makeFakeClock();
+    const { source } = await makeAttached(fc.clock);
+
+    source.emit(toolCallEvent("tc-1", "completed", "Read file.ts"));
+    source.emit({ type: "banner", step: sampleStep, index: 2 });
+    source.emit(toolCallEvent("tc-1", "completed", "Read file.ts"));
+    await renderOnce();
+
+    // Map reset on banner: the second event appends a new line instead of
+    // mutating the first, so the title now appears twice in the scroll log.
+    expect(occurrences(captureCharFrame(), "Read file.ts")).toBe(2);
+  });
+
+  it("schedules the spinner behind the appearance delay, not immediately", async () => {
+    const fc = makeFakeClock();
+    const { source } = await makeAttached(fc.clock);
+
+    source.emit(toolCallEvent("tc-1", "in_progress", "Bash: build"));
+
+    expect(fc.activeTimeouts()).toBe(1);
+    expect(fc.activeIntervals()).toBe(0);
+
+    fc.fireTimeouts(); // appearance delay elapses
+    expect(fc.activeIntervals()).toBe(1);
+  });
+
+  it("never starts the spinner for a call that settles before the delay", async () => {
+    const fc = makeFakeClock();
+    const { source } = await makeAttached(fc.clock);
+
+    source.emit(toolCallEvent("tc-1", "in_progress", "Bash: quick"));
+    source.emit(toolCallEvent("tc-1", "completed", "Bash: quick"));
+
+    fc.fireTimeouts(); // delay fires, but nothing is in progress anymore
+    expect(fc.activeIntervals()).toBe(0);
+  });
+
+  it("animates a long-running call with a braille frame once the interval ticks", async () => {
+    const fc = makeFakeClock();
+    const { source } = await makeAttached(fc.clock);
+
+    source.emit(toolCallEvent("tc-1", "in_progress", "Bash: long"));
+    fc.fireTimeouts(); // start interval
+    fc.tickIntervals(); // advance one frame
+    await renderOnce();
+
+    const frame = captureCharFrame();
+    const animated = SPINNER_FRAMES.some((f) =>
+      frame.includes(`${f} Bash: long`),
+    );
+    expect(animated).toBe(true);
+  });
+
+  it("stops the interval after the last in_progress call settles", async () => {
+    const fc = makeFakeClock();
+    const { source } = await makeAttached(fc.clock);
+
+    source.emit(toolCallEvent("tc-1", "in_progress", "Bash: long"));
+    fc.fireTimeouts();
+    expect(fc.activeIntervals()).toBe(1);
+
+    source.emit(toolCallEvent("tc-1", "completed", "Bash: long"));
+    fc.tickIntervals(); // tick sees nothing in progress → stops itself
+    expect(fc.activeIntervals()).toBe(0);
+  });
+
+  it("stops the spinner interval on detach (no leaked timer)", async () => {
+    const fc = makeFakeClock();
+    const { tui, source } = await makeAttached(fc.clock);
+
+    source.emit(toolCallEvent("tc-1", "in_progress", "Bash: build"));
+    fc.fireTimeouts();
+    expect(fc.activeIntervals()).toBe(1);
+
+    tui.detach();
+    expect(fc.activeIntervals()).toBe(0);
+    expect(fc.cleared.intervals).toBeGreaterThanOrEqual(1);
+  });
+
+  it("stops the spinner interval on shutdown (no leaked timer)", async () => {
+    const fc = makeFakeClock();
+    const { tui, source } = await makeAttached(fc.clock);
+
+    source.emit(toolCallEvent("tc-1", "in_progress", "Bash: build"));
+    fc.fireTimeouts();
+    expect(fc.activeIntervals()).toBe(1);
+
+    tui.shutdown();
+    expect(fc.activeIntervals()).toBe(0);
+  });
+
+  it("cancels a pending appearance delay on detach before the spinner starts", async () => {
+    const fc = makeFakeClock();
+    const { tui, source } = await makeAttached(fc.clock);
+
+    source.emit(toolCallEvent("tc-1", "in_progress", "Bash: build"));
+    expect(fc.activeTimeouts()).toBe(1);
+
+    tui.detach();
+    expect(fc.activeTimeouts()).toBe(0);
+    expect(fc.cleared.timeouts).toBeGreaterThanOrEqual(1);
   });
 });
 

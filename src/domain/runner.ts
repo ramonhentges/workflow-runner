@@ -4,12 +4,23 @@ import type { StepId, StepToken } from "./ids.js";
 
 export type StreamKind = "message" | "thought";
 
+export type ToolCallStatus = "pending" | "in_progress" | "completed" | "failed";
+
+export interface ToolCallView {
+  toolCallId: string; // stable id; the fold key
+  status: ToolCallStatus;
+  kind: string; // ACP ToolKind, or "other"
+  title: string; // precomputed label, e.g. "Bash: npm test"
+  errorText?: string; // present only when status === "failed"
+}
+
 export type RunnerEvent =
   | { type: "banner"; step: Step; index: number }
   | { type: "log"; message: string; color?: string }
   | { type: "stream"; kind: StreamKind; chunk: string; color?: string }
   | { type: "interactive"; enabled: boolean }
   | { type: "status"; text: string; color?: string }
+  | { type: "tool_call"; call: ToolCallView }
   | { type: "summary"; summary: RunSummary };
 
 export interface RunnerObserver {
@@ -35,6 +46,7 @@ export interface RunnerSessionSink {
   log(message: string, color?: string): void;
   stream(kind: StreamKind, chunk: string, color?: string): void;
   status(text: string, color?: string): void;
+  toolCall(view: ToolCallView): void;
 }
 
 export interface RunnerAgentSessionArgs {
@@ -160,6 +172,7 @@ export class Runner {
       stream: (kind, chunk, color) =>
         this.emit({ type: "stream", kind, chunk, color }),
       status: (text, color) => this.emit({ type: "status", text, color }),
+      toolCall: (view) => this.emit({ type: "tool_call", call: view }),
     };
 
     try {

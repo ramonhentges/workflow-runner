@@ -98,6 +98,37 @@ describe("EventLog", () => {
     await log.close();
   });
 
+  it("persists tool_call events and replays them via backlog after a banner", async () => {
+    const runDir = await tempRunDir();
+    const log = await EventLog.open(runDir);
+
+    const banner = expectEntry(
+      await log.append(bannerEvent("step-1"), asStepId("step-1")),
+    );
+    const pending = expectEntry(
+      await log.append(toolCallEvent("call-1", "pending"), asStepId("step-1")),
+    );
+    const inProgress = expectEntry(
+      await log.append(
+        toolCallEvent("call-1", "in_progress"),
+        asStepId("step-1"),
+      ),
+    );
+    const completed = expectEntry(
+      await log.append(toolCallEvent("call-1", "completed"), asStepId("step-1")),
+    );
+
+    // All three lifecycle events persist alongside the banner (no filtering).
+    expect(await lines(runDir)).toHaveLength(4);
+    expect(log.currentStepBacklog(asStepId("step-1"))).toEqual([
+      banner,
+      pending,
+      inProgress,
+      completed,
+    ]);
+    await log.close();
+  });
+
   it("resets the ring buffer when a banner is appended while preserving disk history", async () => {
     const runDir = await tempRunDir();
     const log = await EventLog.open(runDir);
@@ -533,6 +564,16 @@ function logEvent(message: string): RunnerEvent {
 
 function bannerEvent(stepId: StepId): RunnerEvent {
   return { type: "banner", step: step(stepId), index: 1 };
+}
+
+function toolCallEvent(
+  toolCallId: string,
+  status: "pending" | "in_progress" | "completed" | "failed",
+): RunnerEvent {
+  return {
+    type: "tool_call",
+    call: { toolCallId, status, kind: "execute", title: "Bash: npm test" },
+  };
 }
 
 function step(id: StepId): Step {

@@ -261,9 +261,10 @@ describe('error normalization', () => {
 // Integration tests: MSW-mocked endpoints
 
 describe('listWorkflows (integration)', () => {
-  test('returns WorkflowList from GET /workflows?cwd=', async () => {
+  test('returns a combined scoped WorkflowList from GET /workflows?cwd=', async () => {
     const mockWorkflows: WorkflowItem[] = [
-      { name: 'who-is.json', path: '/tmp/workflows/who-is.json' },
+      { name: 'who-is.json', path: '/tmp/workflows/who-is.json', scope: 'project' },
+      { name: 'deploy.json', path: '/state/workflows/deploy.json', scope: 'global' },
     ]
 
     let capturedCwd = ''
@@ -278,11 +279,13 @@ describe('listWorkflows (integration)', () => {
 
     expect(capturedCwd).toBe('/tmp/test')
     expect(result).toEqual({ workflows: mockWorkflows })
+    // The combined list carries a scope on every item (project + global).
+    expect(result.workflows.map((w) => w.scope)).toEqual(['project', 'global'])
   })
 })
 
 describe('workflow CRUD client functions', () => {
-  test("getWorkflow(cwd, 'who-is') requests /workflows/who-is?cwd=... without .json", async () => {
+  test("getWorkflow(cwd, scope, 'who-is') forwards scope alongside cwd, without .json", async () => {
     const doc = makeWorkflowDoc()
     let capturedUrl = ''
 
@@ -293,16 +296,17 @@ describe('workflow CRUD client functions', () => {
       }),
     )
 
-    const result = await getWorkflow('/tmp/test', 'who-is')
+    const result = await getWorkflow('/tmp/test', 'project', 'who-is')
 
     expect(result).toEqual(doc)
     const parsed = new URL(capturedUrl)
     expect(parsed.pathname).toBe('/workflows/who-is')
     expect(parsed.pathname).not.toContain('.json')
     expect(parsed.searchParams.get('cwd')).toBe('/tmp/test')
+    expect(parsed.searchParams.get('scope')).toBe('project')
   })
 
-  test('createWorkflow POSTs /workflows?cwd=... with a JSON body and returns the parsed document', async () => {
+  test('createWorkflow(cwd, "global", body) POSTs /workflows?cwd=&scope=global with a JSON body', async () => {
     const body = {
       name: 'new-flow',
       workflow: makeWorkflowDoc({ name: 'new-flow' }).workflow,
@@ -321,12 +325,13 @@ describe('workflow CRUD client functions', () => {
       }),
     )
 
-    const result = await createWorkflow('/tmp/test', body)
+    const result = await createWorkflow('/tmp/test', 'global', body)
 
     expect(result).toEqual(response)
     const parsed = new URL(capturedUrl)
     expect(parsed.pathname).toBe('/workflows')
     expect(parsed.searchParams.get('cwd')).toBe('/tmp/test')
+    expect(parsed.searchParams.get('scope')).toBe('global')
     expect(capturedContentType).toContain('application/json')
     expect(capturedBody).toEqual(body)
   })
@@ -350,17 +355,18 @@ describe('workflow CRUD client functions', () => {
       }),
     )
 
-    const result = await updateWorkflow('/tmp/test', 'old-flow', body)
+    const result = await updateWorkflow('/tmp/test', 'project', 'old-flow', body)
 
     expect(result).toEqual(response)
     const parsed = new URL(capturedUrl)
     expect(capturedMethod).toBe('PUT')
     expect(parsed.pathname).toBe('/workflows/old-flow')
     expect(parsed.searchParams.get('cwd')).toBe('/tmp/test')
+    expect(parsed.searchParams.get('scope')).toBe('project')
     expect(capturedBody).toEqual(body)
   })
 
-  test("deleteWorkflow issues DELETE to /workflows/{name}?cwd=...", async () => {
+  test('deleteWorkflow(cwd, "project", name) issues DELETE to /workflows/{name}?cwd=&scope=project', async () => {
     let capturedUrl = ''
     let capturedMethod = ''
 
@@ -372,13 +378,14 @@ describe('workflow CRUD client functions', () => {
       }),
     )
 
-    const result = await deleteWorkflow('/tmp/test', 'who-is')
+    const result = await deleteWorkflow('/tmp/test', 'project', 'who-is')
 
     expect(result).toEqual({ deleted: 'who-is' })
     const parsed = new URL(capturedUrl)
     expect(capturedMethod).toBe('DELETE')
     expect(parsed.pathname).toBe('/workflows/who-is')
     expect(parsed.searchParams.get('cwd')).toBe('/tmp/test')
+    expect(parsed.searchParams.get('scope')).toBe('project')
   })
 
   test("getIdeCatalog(cwd, 'opencode') requests /ide/opencode/catalog?cwd=...", async () => {
@@ -415,7 +422,7 @@ describe('workflow CRUD client functions', () => {
     )
 
     try {
-      await createWorkflow('/tmp/test', {
+      await createWorkflow('/tmp/test', 'project', {
         name: 'who-is',
         workflow: makeWorkflowDoc().workflow,
       })
@@ -456,8 +463,8 @@ describe('workflow CRUD client functions (MSW integration)', () => {
     )
 
     const workflow = makeWorkflowDoc({ name: 'round-trip' }).workflow
-    const created = await createWorkflow('/tmp/test', { name: 'round-trip', workflow })
-    const fetched = await getWorkflow('/tmp/test', 'round-trip')
+    const created = await createWorkflow('/tmp/test', 'project', { name: 'round-trip', workflow })
+    const fetched = await getWorkflow('/tmp/test', 'project', 'round-trip')
 
     expect(created).toEqual(fetched)
     expect(fetched.workflow).toEqual(workflow)

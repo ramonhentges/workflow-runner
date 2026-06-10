@@ -85,9 +85,15 @@ export interface StartRunRequest {
   cwd: string
 }
 
+// Scope discriminator mirroring the server `WorkflowScope` (src/app/api/schema.ts,
+// ADR-003): "global" workflows live in the daemon state root, "project" workflows
+// under <cwd>/workflows.
+export type WorkflowScope = 'global' | 'project'
+
 export interface WorkflowItem {
   name: string
   path: string
+  scope: WorkflowScope
 }
 
 export interface WorkflowList {

@@ -24,6 +24,20 @@ The daemon is auto-spawned on first CLI invocation; the `daemon` subcommand exis
 
 Always use `systematic-debugging` skill when debugging.
 
+## Web UI components
+
+The `web/` workspace uses **shadcn/ui** (config in `web/components.json`: style
+`new-york`, baseColor `zinc`). UI primitives live in `web/src/components/ui/`.
+
+To add a new primitive, install it via the CLI rather than hand-writing it so it
+matches the project's generated conventions:
+
+```bash
+cd web && bunx --bun shadcn@latest add <component>   # e.g. textarea, dialog, tooltip
+```
+
+This writes `web/src/components/ui/<component>.tsx`. Import it via the `@/components/ui/<component>` alias and compose it in `web/src/features/**`. Components are React 19 function components that take `ref` as a regular prop (no `forwardRef`), so react-hook-form's `register()` ref flows through `{...props}`. Run `bun run test` and `bun run typecheck` (from `web/`) after.
+
 ## Architecture
 
 The project follows hexagonal architecture with three layers:

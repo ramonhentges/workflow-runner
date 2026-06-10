@@ -3,6 +3,7 @@ import type { Control } from 'react-hook-form'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
 import {
   Select,
   SelectContent,
@@ -228,10 +229,11 @@ export function StepFields({
           )}
         </div>
 
-        <div className="flex flex-col gap-1">
+        <div className="flex flex-col gap-1 col-span-2">
           <Label htmlFor={`step-description-${stepIndex}`}>Description</Label>
-          <Input
+          <Textarea
             id={`step-description-${stepIndex}`}
+            rows={4}
             {...register(`steps.${stepIndex}.description`)}
             placeholder="Step description"
           />

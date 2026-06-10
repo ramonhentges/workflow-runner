@@ -251,6 +251,53 @@ describe('index route status filter', () => {
   })
 })
 
+// ─── Integration: new workflow route scope (duplicate seeding) ───────────────
+
+describe('new workflow route duplicate seeding', () => {
+  beforeEach(() => {
+    useCwdStore.setState({
+      cwds: [{ id: 'cwd-1', label: 'MyApp', path: '/home/user/myapp' }],
+      activeCwdId: 'cwd-1',
+    })
+  })
+
+  test('duplicating a global workflow reads the source with scope=global', async () => {
+    let capturedScope: string | null = null
+    server.use(
+      http.get(`${BASE}/workflows/:name`, ({ request, params }) => {
+        capturedScope = new URL(request.url).searchParams.get('scope')
+        return HttpResponse.json({
+          name: String(params.name),
+          path: `/global/workflows/${String(params.name)}.json`,
+          workflow: { id: 'shared', name: 'Shared', version: '1.0', steps: [] },
+        })
+      }),
+    )
+
+    renderApp('/workflows/new?from=shared&scope=global')
+
+    await waitFor(() => expect(capturedScope).toBe('global'))
+  })
+
+  test('a plain create (no scope) defaults the source read to scope=project', async () => {
+    let capturedScope: string | null = null
+    server.use(
+      http.get(`${BASE}/workflows/:name`, ({ request, params }) => {
+        capturedScope = new URL(request.url).searchParams.get('scope')
+        return HttpResponse.json({
+          name: String(params.name),
+          path: `/home/user/myapp/workflows/${String(params.name)}.json`,
+          workflow: { id: 'alpha', name: 'Alpha', version: '1.0', steps: [] },
+        })
+      }),
+    )
+
+    renderApp('/workflows/new?from=alpha')
+
+    await waitFor(() => expect(capturedScope).toBe('project'))
+  })
+})
+
 // ─── Integration: full operate loop ──────────────────────────────────────────
 
 describe('full operate loop', () => {
@@ -267,7 +314,9 @@ describe('full operate loop', () => {
       http.get(`${BASE}/runs`, () => HttpResponse.json({ runs: [] })),
       http.get(`${BASE}/workflows`, () =>
         HttpResponse.json({
-          workflows: [{ name: 'who-is', path: '/home/user/myapp/workflows/who-is.json' }],
+          workflows: [
+            { name: 'who-is', path: '/home/user/myapp/workflows/who-is.json', scope: 'project' },
+          ],
         }),
       ),
       http.post(`${BASE}/runs`, () => HttpResponse.json({ runId: RUN_ID })),
@@ -285,7 +334,7 @@ describe('full operate loop', () => {
     // StartRunForm: wait for the shadcn Select trigger, open it, pick the option
     const workflowSelect = await screen.findByRole('combobox', { name: 'Workflow' })
     await user.click(workflowSelect)
-    await user.click(await screen.findByRole('option', { name: 'who-is' }))
+    await user.click(await screen.findByRole('option', { name: /who-is/ }))
 
     // Submit → POST /runs → navigate to /runs/<runId>
     await user.click(screen.getByRole('button', { name: 'Start run' }))

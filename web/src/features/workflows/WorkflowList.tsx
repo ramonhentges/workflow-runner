@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Link, useNavigate } from '@tanstack/react-router'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Copy, Edit, Play, Plus, Trash2, X } from 'lucide-react'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -13,11 +14,19 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { ApiError, deleteWorkflow, startRun } from '@/lib/api/client'
+import { ApiError, startRun } from '@/lib/api/client'
 import { useCwdStore } from '@/stores/cwd-store'
-import { useWorkflowList, workflowListQueryKey } from './useWorkflowList'
+import { useWorkflowList } from './useWorkflowList'
+import { useDeleteWorkflow } from './useWorkflow'
 import { workflowBareName, workflowDisplayName } from './workflowNames'
-import type { WorkflowItem } from '@/lib/api/types'
+import type { WorkflowItem, WorkflowScope } from '@/lib/api/types'
+
+// Each row shows which scope its workflow belongs to; a global and a project
+// workflow may share a name (ADR-003), so the badge is the user-facing
+// disambiguator that pairs with the `scope + name` row key.
+function scopeLabel(scope: WorkflowScope): string {
+  return scope === 'global' ? 'Global' : 'Project'
+}
 
 function runActiveDeleteMessage(error: unknown): string {
   if (error instanceof ApiError && error.status === 409 && error.code === 'WORKFLOW_RUN_ACTIVE') {
@@ -37,24 +46,10 @@ export function WorkflowList() {
   const { data, isLoading, isError } = useWorkflowList()
   const workflows = data?.workflows ?? []
 
-  const deleteMutation = useMutation({
-    mutationFn: (workflow: WorkflowItem) => {
-      if (!activeCwd) throw new Error('No active working directory selected.')
-      return deleteWorkflow(activeCwd.path, workflowBareName(workflow))
-    },
-    onMutate: () => {
-      setDeleteError('')
-    },
-    onSuccess: async () => {
-      setConfirmingName(null)
-      await queryClient.invalidateQueries({
-        queryKey: workflowListQueryKey(activeCwd?.path ?? null),
-      })
-    },
-    onError: error => {
-      setDeleteError(runActiveDeleteMessage(error))
-    },
-  })
+  // Delete routes through the scope-aware hook (task_05); the row supplies its
+  // own scope so the correct directory is targeted. UI concerns (confirm reset,
+  // error banner) are handled via per-call mutate callbacks.
+  const deleteMutation = useDeleteWorkflow()
 
   const startMutation = useMutation({
     mutationFn: (workflow: WorkflowItem) => {
@@ -90,7 +85,7 @@ export function WorkflowList() {
       <div className="flex items-center justify-between gap-3">
         <h2 className="text-lg font-semibold">Workflows</h2>
         <Button asChild variant="outline" size="sm">
-          <Link to="/workflows/new" search={{ from: undefined }}>
+          <Link to="/workflows/new" search={{ from: undefined, scope: 'project' }}>
             <Plus className="size-4" aria-hidden="true" />
             New workflow
           </Link>
@@ -151,7 +146,7 @@ export function WorkflowList() {
           <Button asChild variant="outline" size="sm">
             <Link
               to="/workflows/new"
-              search={{ from: undefined }}
+              search={{ from: undefined, scope: 'project' }}
               data-testid="create-first-workflow-action"
             >
               <Plus className="size-4" aria-hidden="true" />
@@ -167,6 +162,7 @@ export function WorkflowList() {
             <TableHeader>
               <TableRow>
                 <TableHead>Workflow</TableHead>
+                <TableHead>Scope</TableHead>
                 <TableHead>File</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
@@ -179,8 +175,20 @@ export function WorkflowList() {
                 const isStarting = startMutation.isPending && startingName === bareName
 
                 return (
-                  <TableRow key={workflow.path} data-testid={`workflow-row-${bareName}`}>
+                  <TableRow
+                    key={`${workflow.scope}-${bareName}`}
+                    data-testid={`workflow-row-${bareName}`}
+                  >
                     <TableCell className="font-medium">{workflowDisplayName(workflow)}</TableCell>
+                    <TableCell>
+                      <Badge
+                        variant={workflow.scope === 'global' ? 'secondary' : 'outline'}
+                        data-testid="workflow-scope-badge"
+                        data-scope={workflow.scope}
+                      >
+                        {scopeLabel(workflow.scope)}
+                      </Badge>
+                    </TableCell>
                     <TableCell className="text-muted-foreground font-mono text-xs">
                       {workflow.path}
                     </TableCell>
@@ -199,13 +207,20 @@ export function WorkflowList() {
                           {isStarting ? 'Starting…' : 'Run'}
                         </Button>
                         <Button asChild variant="outline" size="sm">
-                          <Link to="/workflows/$name/edit" params={{ name: bareName }}>
+                          <Link
+                            to="/workflows/$name/edit"
+                            params={{ name: bareName }}
+                            search={{ scope: workflow.scope }}
+                          >
                             <Edit className="size-4" aria-hidden="true" />
                             Edit
                           </Link>
                         </Button>
                         <Button asChild variant="outline" size="sm">
-                          <Link to="/workflows/new" search={{ from: bareName }}>
+                          <Link
+                            to="/workflows/new"
+                            search={{ from: bareName, scope: workflow.scope }}
+                          >
                             <Copy className="size-4" aria-hidden="true" />
                             Duplicate
                           </Link>
@@ -230,7 +245,16 @@ export function WorkflowList() {
                               variant="destructive"
                               size="sm"
                               disabled={isDeleting}
-                              onClick={() => deleteMutation.mutate(workflow)}
+                              onClick={() => {
+                                setDeleteError('')
+                                deleteMutation.mutate(
+                                  { scope: workflow.scope, name: bareName },
+                                  {
+                                    onSuccess: () => setConfirmingName(null),
+                                    onError: error => setDeleteError(runActiveDeleteMessage(error)),
+                                  },
+                                )
+                              }}
                             >
                               <Trash2 className="size-4" aria-hidden="true" />
                               {isDeleting ? 'Deleting…' : 'Confirm'}

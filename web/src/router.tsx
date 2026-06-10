@@ -10,7 +10,7 @@ import {
   workflowDocToFormData,
 } from './features/workflows/WorkflowDraftSchema'
 import { useCwdStore } from './stores/cwd-store'
-import { parseStatus, type RunStatus } from './lib/api/types'
+import { parseStatus, type RunStatus, type WorkflowScope } from './lib/api/types'
 
 function NotFound() {
   return (
@@ -51,8 +51,14 @@ const workflowsRoute = createRoute({
 const newWorkflowRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/workflows/new',
-  validateSearch: (search: Record<string, unknown>) => ({
+  // `from` seeds a duplicate; `scope` says which scope to copy that source from
+  // so duplicating a global workflow reads the global document (mirrors the edit
+  // route below). Absent/unknown scope coerces to "project" for plain creates.
+  validateSearch: (
+    search: Record<string, unknown>,
+  ): { from?: string; scope: WorkflowScope } => ({
     from: typeof search.from === 'string' ? search.from : undefined,
+    scope: search.scope === 'global' ? 'global' : 'project',
   }),
   component: NewWorkflowPage,
 })
@@ -60,6 +66,12 @@ const newWorkflowRoute = createRoute({
 const editWorkflowRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/workflows/$name/edit',
+  // The list row carries its scope into the edit action (task_06); an unknown
+  // or absent value coerces to "project" for back-compat. task_07 threads this
+  // into useWorkflow(name, scope) and the read-only scope badge.
+  validateSearch: (search: Record<string, unknown>): { scope: WorkflowScope } => ({
+    scope: search.scope === 'global' ? 'global' : 'project',
+  }),
   component: EditWorkflowPage,
 })
 
@@ -75,9 +87,9 @@ function RunPage() {
 }
 
 function NewWorkflowPage() {
-  const { from } = newWorkflowRoute.useSearch()
+  const { from, scope } = newWorkflowRoute.useSearch()
   const activeCwd = useCwdStore(state => state.activeCwd())
-  const { data: sourceDoc, isLoading } = useWorkflow(from)
+  const { data: sourceDoc, isLoading } = useWorkflow(from, scope)
 
   if (from && activeCwd && isLoading) {
     return (
@@ -95,8 +107,9 @@ function NewWorkflowPage() {
 
 function EditWorkflowPage() {
   const { name } = editWorkflowRoute.useParams()
+  const { scope } = editWorkflowRoute.useSearch()
   const activeCwd = useCwdStore(state => state.activeCwd())
-  const { data: workflowDoc, isLoading, isError } = useWorkflow(name)
+  const { data: workflowDoc, isLoading, isError } = useWorkflow(name, scope)
 
   if (activeCwd && isLoading) {
     return (
@@ -118,6 +131,7 @@ function EditWorkflowPage() {
     <WorkflowEditor
       mode="edit"
       existingName={name}
+      scope={scope}
       initialValues={workflowDoc ? workflowDocToFormData(workflowDoc) : undefined}
     />
   )

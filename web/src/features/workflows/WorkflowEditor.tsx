@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useForm, useFieldArray, FormProvider } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useNavigate } from '@tanstack/react-router'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -14,9 +14,9 @@ import {
   CardTitle,
 } from '@/components/ui/card'
 import { useCwdStore } from '@/stores/cwd-store'
-import { ApiError, createWorkflow, updateWorkflow } from '@/lib/api/client'
-import type { WorkflowUpdateBody } from '@/lib/api/types'
-import { workflowListQueryKey } from './useWorkflowList'
+import { ApiError } from '@/lib/api/client'
+import type { WorkflowScope, WorkflowUpdateBody } from '@/lib/api/types'
+import { useCreateWorkflow, useUpdateWorkflow } from './useWorkflow'
 import { StepFields } from './StepFields'
 import {
   WorkflowDraftSchema,
@@ -29,13 +29,31 @@ interface WorkflowEditorProps {
   mode: 'create' | 'edit'
   existingName?: string
   initialValues?: WorkflowDraft
+  // Edit mode: the existing workflow's scope, derived from its file location and
+  // shown read-only — edits preserve scope (ADR-003). Ignored in create mode,
+  // where the toggle owns the chosen scope (default Project).
+  scope?: WorkflowScope
 }
 
-export function WorkflowEditor({ mode, existingName, initialValues }: WorkflowEditorProps) {
+function scopeLabel(scope: WorkflowScope): string {
+  return scope === 'global' ? 'Global' : 'Project'
+}
+
+export function WorkflowEditor({
+  mode,
+  existingName,
+  initialValues,
+  scope: existingScope,
+}: WorkflowEditorProps) {
   const activeCwd = useCwdStore(state => state.activeCwd())
   const navigate = useNavigate()
-  const queryClient = useQueryClient()
   const [serverError, setServerError] = useState('')
+
+  // Create chooses scope via the toggle (default Project); edit reuses the
+  // existing scope unchanged. `effectiveScope` is what the mutation targets.
+  const [createScope, setCreateScope] = useState<WorkflowScope>('project')
+  const effectiveScope: WorkflowScope =
+    mode === 'edit' ? existingScope ?? 'project' : createScope
 
   const form = useForm<WorkflowDraft>({
     resolver: zodResolver(WorkflowDraftSchema),
@@ -52,43 +70,49 @@ export function WorkflowEditor({ mode, existingName, initialValues }: WorkflowEd
     name: 'steps',
   })
 
-  const mutation = useMutation({
-    mutationFn: async (data: WorkflowDraft) => {
-      if (!activeCwd) throw new Error('No active working directory selected.')
-      const workflow = toWorkflowPayload(data)
+  // Scope-aware mutations from task_05 own combined-list invalidation; the editor
+  // supplies the target scope and handles navigation/error via per-call callbacks.
+  const createMutation = useCreateWorkflow()
+  const updateMutation = useUpdateWorkflow()
+  const isPending = createMutation.isPending || updateMutation.isPending
 
-      if (mode === 'create') {
-        return createWorkflow(activeCwd.path, { name: data.fileName, workflow })
-      } else {
-        const body: WorkflowUpdateBody = { workflow }
-        if (data.fileName !== existingName) {
-          body.name = data.fileName
-        }
-        return updateWorkflow(activeCwd.path, existingName!, body)
-      }
-    },
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({
-        queryKey: workflowListQueryKey(activeCwd?.path ?? null),
-      })
-      await navigate({ to: '/workflows' })
-    },
-    onError: error => {
-      if (
-        error instanceof ApiError &&
-        error.status === 400 &&
-        error.code === 'WORKFLOW_INVALID'
-      ) {
-        setServerError(error.message)
-      } else {
-        setServerError(error instanceof Error ? error.message : 'Save failed.')
-      }
-    },
-  })
+  function reportError(error: unknown) {
+    if (
+      error instanceof ApiError &&
+      error.status === 400 &&
+      error.code === 'WORKFLOW_INVALID'
+    ) {
+      setServerError(error.message)
+    } else {
+      setServerError(error instanceof Error ? error.message : 'Save failed.')
+    }
+  }
 
   function handleSubmit(data: WorkflowDraft) {
     setServerError('')
-    mutation.mutate(data)
+    const workflow = toWorkflowPayload(data)
+    const callbacks = {
+      onSuccess: () => {
+        void navigate({ to: '/workflows' })
+      },
+      onError: reportError,
+    }
+
+    if (mode === 'create') {
+      createMutation.mutate(
+        { scope: effectiveScope, body: { name: data.fileName, workflow } },
+        callbacks,
+      )
+    } else {
+      const body: WorkflowUpdateBody = { workflow }
+      if (data.fileName !== existingName) {
+        body.name = data.fileName
+      }
+      updateMutation.mutate(
+        { scope: effectiveScope, name: existingName!, body },
+        callbacks,
+      )
+    }
   }
 
   if (!activeCwd) {
@@ -120,6 +144,41 @@ export function WorkflowEditor({ mode, existingName, initialValues }: WorkflowEd
             <CardTitle className="text-sm text-muted-foreground">Workflow</CardTitle>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
+            <div className="flex flex-col gap-1">
+              <Label>Scope</Label>
+              {mode === 'create' ? (
+                <div
+                  className="flex gap-2"
+                  role="group"
+                  aria-label="Workflow scope"
+                  data-testid="scope-toggle"
+                >
+                  {(['project', 'global'] as const).map(option => (
+                    <Button
+                      key={option}
+                      type="button"
+                      size="sm"
+                      variant={createScope === option ? 'default' : 'outline'}
+                      aria-pressed={createScope === option}
+                      onClick={() => setCreateScope(option)}
+                      data-testid={`scope-toggle-${option}`}
+                    >
+                      {scopeLabel(option)}
+                    </Button>
+                  ))}
+                </div>
+              ) : (
+                <Badge
+                  variant={effectiveScope === 'global' ? 'secondary' : 'outline'}
+                  className="w-fit"
+                  data-testid="scope-badge"
+                  data-scope={effectiveScope}
+                >
+                  {scopeLabel(effectiveScope)}
+                </Badge>
+              )}
+            </div>
+
             <div className="grid grid-cols-2 gap-3">
               <div className="flex flex-col gap-1">
                 <Label htmlFor="workflow-filename">File name</Label>
@@ -232,8 +291,8 @@ export function WorkflowEditor({ mode, existingName, initialValues }: WorkflowEd
         )}
 
         <div className="flex gap-3">
-          <Button type="submit" disabled={mutation.isPending} data-testid="save-button">
-            {mutation.isPending ? 'Saving…' : 'Save workflow'}
+          <Button type="submit" disabled={isPending} data-testid="save-button">
+            {isPending ? 'Saving…' : 'Save workflow'}
           </Button>
           <Button
             type="button"

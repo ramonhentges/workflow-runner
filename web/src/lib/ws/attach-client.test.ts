@@ -43,6 +43,12 @@ class FakeWebSocket {
     this._emit('message', { data: JSON.stringify(data) })
   }
 
+  // Test helper — simulate the socket transitioning to OPEN (drives heartbeat).
+  triggerOpen() {
+    this.readyState = FakeWebSocket.OPEN
+    this._emit('open', {})
+  }
+
   // Test helper — simulate socket close without calling client.close()
   serverClose() {
     this.readyState = FakeWebSocket.CLOSED
@@ -253,15 +259,111 @@ describe('close', () => {
     expect(updates.length).toBe(countAfterClose)
   })
 
-  test('server-side socket close surfaces closed=true to subscribers', () => {
+  test('server-side close on a terminal run surfaces closed=true', () => {
     const client = openAttach(RUN_ID, BASE_URL)
     const ws = latestWs()
 
     let latest: RunViewModel = initialViewModel
     client.subscribe(vm => { latest = vm })
 
+    // Run reached a terminal status before the socket closed.
+    ws.receive({ type: 'status', status: 'completed' })
     ws.serverClose()
 
+    expect(latest.closed).toBe(true)
+    // No reconnection attempt for a finished run.
+    expect(FakeWebSocket.instances).toHaveLength(1)
+  })
+})
+
+describe('heartbeat', () => {
+  beforeEach(() => { vi.useFakeTimers() })
+  afterEach(() => { vi.useRealTimers() })
+
+  test('sends a ping frame every 15s while the socket is OPEN', () => {
+    const client = openAttach(RUN_ID, BASE_URL)
+    const ws = latestWs()
+    ws.triggerOpen()
+
+    vi.advanceTimersByTime(15_000)
+    expect(ws.sentMessages.map(m => JSON.parse(m))).toContainEqual({ type: 'ping' })
+
+    ws.sentMessages.length = 0
+    vi.advanceTimersByTime(15_000)
+    expect(ws.sentMessages.map(m => JSON.parse(m))).toContainEqual({ type: 'ping' })
+
+    client.close()
+  })
+
+  test('stops pinging after the client is closed', () => {
+    const client = openAttach(RUN_ID, BASE_URL)
+    const ws = latestWs()
+    ws.triggerOpen()
+
+    client.close()
+    ws.sentMessages.length = 0
+    vi.advanceTimersByTime(60_000)
+
+    expect(ws.sentMessages).toHaveLength(0)
+  })
+})
+
+describe('auto-reconnect', () => {
+  beforeEach(() => { vi.useFakeTimers() })
+  afterEach(() => { vi.useRealTimers() })
+
+  test('reconnects with ?fromSeq after an unexpected close on a running run', () => {
+    const client = openAttach(RUN_ID, BASE_URL)
+    const ws = latestWs()
+
+    let latest: RunViewModel = initialViewModel
+    client.subscribe(vm => { latest = vm })
+
+    // Run is running and we have applied up to seq 5.
+    ws.receive({ type: 'snapshot', snapshot: makeRunDetail() })
+    ws.receive({
+      type: 'event',
+      entry: { seq: 5, ts: 5000, stepId: 'step-1', event: { type: 'log', message: 'hi' } },
+    })
+
+    ws.serverClose()
+
+    // Still considered open (reconnecting), not closed.
+    expect(latest.closed).toBe(false)
+
+    // Backoff elapses → a new socket opens, resuming from the last seq.
+    vi.advanceTimersByTime(250)
+    expect(FakeWebSocket.instances).toHaveLength(2)
+    expect(latestWs().url).toBe(`${BASE_URL}/runs/${RUN_ID}/attach?fromSeq=5`)
+
+    // The resumed socket keeps feeding the same model.
+    latestWs().receive({
+      type: 'event',
+      entry: { seq: 6, ts: 6000, stepId: 'step-1', event: { type: 'log', message: 'again' } },
+    })
+    expect(latest.transcript.some(t => t.text === 'again')).toBe(true)
+
+    client.close()
+  })
+
+  test('gives up and sets closed=true after exhausting retries', () => {
+    const client = openAttach(RUN_ID, BASE_URL)
+
+    let latest: RunViewModel = initialViewModel
+    client.subscribe(vm => { latest = vm })
+
+    latestWs().receive({ type: 'snapshot', snapshot: makeRunDetail() })
+
+    // Five backoff steps (250, 500, 1000, 2000, 5000), each followed by a close.
+    const delays = [250, 500, 1000, 2000, 5000]
+    for (const delay of delays) {
+      latestWs().serverClose()
+      expect(latest.closed).toBe(false)
+      vi.advanceTimersByTime(delay)
+    }
+
+    // The sixth close has no remaining budget → give up.
+    latestWs().serverClose()
     expect(latest.closed).toBe(true)
   })
 })

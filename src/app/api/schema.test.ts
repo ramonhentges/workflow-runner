@@ -10,6 +10,7 @@ import {
   RunDetailSchema,
   AttachFrameSchema,
   InputFrameSchema,
+  ClientFrameSchema,
   StartRunRequestSchema,
   EventsQuerySchema,
   EventsPageSchema,
@@ -220,6 +221,32 @@ describe("InputFrameSchema", () => {
 
   it("rejects missing message", () => {
     const result = InputFrameSchema.safeParse({ type: "input" });
+    expect(result.success).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ClientFrame (input | ping)
+// ---------------------------------------------------------------------------
+
+describe("ClientFrameSchema", () => {
+  it("accepts a valid input frame", () => {
+    const result = ClientFrameSchema.safeParse({ type: "input", message: "hello" });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts a ping frame", () => {
+    const result = ClientFrameSchema.safeParse({ type: "ping" });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects an input frame with empty message", () => {
+    const result = ClientFrameSchema.safeParse({ type: "input", message: "" });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects an unknown frame type", () => {
+    const result = ClientFrameSchema.safeParse({ type: "pong" });
     expect(result.success).toBe(false);
   });
 });

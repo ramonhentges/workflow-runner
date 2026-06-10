@@ -587,6 +587,51 @@ describe("createPerConnectionState — input frame (onMessage)", () => {
       expect(errFrame.code).toBe("INVALID_FRAME");
     }
   });
+
+  it("accepts a ping heartbeat frame without an error frame or run interaction", async () => {
+    const received: string[] = [];
+    const rm: RunManager = {
+      ...makeRm({ activeEventLog: makeEventLogMock([]) }),
+      sendInput: async (_runId: string, message: string) => {
+        received.push(message);
+        return 1;
+      },
+    } as unknown as RunManager;
+
+    const mock = makeMockWs();
+    const state = createPerConnectionState(rm, "run001", undefined, () => {});
+    await state.onOpen(mock.ws);
+
+    const before = mock.sentFrames().length;
+    await state.onMessage(mock.ws, JSON.stringify({ type: "ping" }));
+
+    // A ping produces no outbound frame (no error, no echo) and no run work.
+    expect(mock.sentFrames().slice(before)).toHaveLength(0);
+    expect(received).toEqual([]);
+    expect(mock.closeCalls().length).toBe(0);
+  });
+
+  it("ping frames reset the idle timer (heartbeat keeps a quiet connection alive)", async () => {
+    const rm = makeRm({ activeEventLog: makeEventLogMock([]) });
+    const mock = makeMockWs();
+    const state = createPerConnectionState(rm, "run001", undefined, () => {}, {
+      idleTimeoutMs: 80,
+    });
+
+    await state.onOpen(mock.ws);
+
+    // A ping just before the timeout resets the timer.
+    await new Promise((r) => setTimeout(r, 50));
+    await state.onMessage(mock.ws, JSON.stringify({ type: "ping" }));
+
+    // Still alive at 80ms (timer reset at ~50ms by the ping).
+    await new Promise((r) => setTimeout(r, 50));
+    expect(mock.closeCalls().filter(([c]) => c === 1001).length).toBe(0);
+
+    // After the full timeout with no more pings, the timer fires.
+    await new Promise((r) => setTimeout(r, 100));
+    expect(mock.closeCalls().some(([code]) => code === 1001)).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------

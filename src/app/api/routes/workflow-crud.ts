@@ -1,6 +1,7 @@
 import { createRoute, z } from "@hono/zod-openapi";
 import { promises as fs } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { homedir } from "node:os";
 import { randomBytes } from "node:crypto";
 import {
   WorkflowsQuerySchema,
@@ -8,6 +9,8 @@ import {
   WorkflowCreateBodySchema,
   WorkflowUpdateBodySchema,
   WorkflowDocSchema,
+  WorkflowScopeSchema,
+  type WorkflowScope,
 } from "../schema.js";
 import { Workflow, WorkflowConfigError } from "../../../domain/workflow.js";
 import { mapError } from "../error-map.js";
@@ -29,12 +32,38 @@ function resolveWorkflowsDir(cwd: string): string {
 }
 
 /**
- * Resolves the absolute path for `<cwd>/workflows/<name>.json`.
- * Throws if the result would escape the workflows directory (defense-in-depth;
- * the name is already validated by WorkflowNameParamSchema before reaching handlers).
+ * Resolves the global workflows directory from the daemon storage root (ADR-002):
+ * `(XDG_STATE_HOME ?? ~/.local/state)/workflow-runner/workflows`. Independent of
+ * any `cwd`. Mirrors `resolveStorageRoot` in `infra/daemon/run-store.ts`.
  */
-export function resolveWorkflowFile(cwd: string, name: string): string {
-  const dir = resolveWorkflowsDir(cwd);
+export function resolveGlobalWorkflowsDir(env: NodeJS.ProcessEnv = process.env): string {
+  const stateHome = env.XDG_STATE_HOME ?? join(homedir(), ".local", "state");
+  return join(stateHome, "workflow-runner", "workflows");
+}
+
+/**
+ * Single source of truth for directory selection by scope (ADR-003). Returns the
+ * global dir for `"global"` (ignoring `cwd`) and `<cwd>/workflows` for
+ * `"project"`. Throws `WorkflowConfigError` when project scope is requested
+ * without a `cwd`.
+ */
+export function resolveScopedWorkflowsDir(
+  scope: WorkflowScope,
+  cwd: string | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  if (scope === "global") return resolveGlobalWorkflowsDir(env);
+  if (!cwd) throw new WorkflowConfigError("cwd is required for project scope");
+  return resolveWorkflowsDir(cwd);
+}
+
+/**
+ * Resolves the absolute path for `<dir>/<name>.json` within an already-resolved
+ * workflows directory (project or global). Throws if the result would escape
+ * `dir` (defense-in-depth; the name is already validated by
+ * WorkflowNameParamSchema before reaching handlers).
+ */
+export function resolveWorkflowFileInDir(dir: string, name: string): string {
   const file = join(dir, `${name}.json`);
   // OS-portable containment check: the resolved file must be a direct child of
   // `dir`. `relative` escapes (starts with "..") or returns an absolute path
@@ -47,6 +76,14 @@ export function resolveWorkflowFile(cwd: string, name: string): string {
     throw new WorkflowConfigError(`Unsafe workflow name: ${name}`);
   }
   return file;
+}
+
+/**
+ * Resolves the absolute path for `<cwd>/workflows/<name>.json`. Thin wrapper
+ * over {@link resolveWorkflowFileInDir} for project-scope callers and tests.
+ */
+export function resolveWorkflowFile(cwd: string, name: string): string {
+  return resolveWorkflowFileInDir(resolveWorkflowsDir(cwd), name);
 }
 
 export async function writeJsonAtomic(filePath: string, data: unknown): Promise<void> {
@@ -68,6 +105,21 @@ async function fileExists(path: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/**
+ * Resolves the target directory and effective scope for a CRUD request
+ * (ADR-003). Scope defaults to `"project"` when the query omits it. Returns
+ * `ok: false` for project scope without a `cwd` so the handler can emit the
+ * `MISSING_CWD` error; global scope never needs a `cwd`.
+ */
+function resolveScopeTarget(
+  scope: WorkflowScope | undefined,
+  cwd: string | undefined,
+): { ok: true; scope: WorkflowScope; dir: string } | { ok: false } {
+  const effective = scope ?? "project";
+  if (effective === "project" && !cwd) return { ok: false };
+  return { ok: true, scope: effective, dir: resolveScopedWorkflowsDir(effective, cwd) };
 }
 
 // ---------------------------------------------------------------------------
@@ -163,7 +215,11 @@ const deleteWorkflowRoute = createRoute({
   },
   responses: {
     200: {
-      content: { "application/json": { schema: z.object({ deleted: z.string() }) } },
+      content: {
+        "application/json": {
+          schema: z.object({ deleted: z.string(), scope: WorkflowScopeSchema }),
+        },
+      },
       description: "Workflow deleted",
     },
     400: {
@@ -189,13 +245,14 @@ export function registerWorkflowCrudRoutes(app: ApiApp, rm: RunManager): void {
   // GET /workflows/:name — read one
   app.openapi(getWorkflowRoute, async (c) => {
     const { name } = c.req.valid("param");
-    const { cwd } = c.req.valid("query");
+    const { cwd, scope } = c.req.valid("query");
 
-    if (!cwd) {
+    const target = resolveScopeTarget(scope, cwd);
+    if (!target.ok) {
       return c.json({ code: "MISSING_CWD", message: "cwd query parameter is required" }, 400);
     }
 
-    const file = resolveWorkflowFile(cwd, name);
+    const file = resolveWorkflowFileInDir(target.dir, name);
 
     let content: string;
     try {
@@ -217,14 +274,15 @@ export function registerWorkflowCrudRoutes(app: ApiApp, rm: RunManager): void {
         400,
       );
     }
-    return c.json({ name, path: file, workflow }, 200);
+    return c.json({ name, path: file, scope: target.scope, workflow }, 200);
   });
 
   // POST /workflows — create
   app.openapi(createWorkflowRoute, async (c) => {
-    const { cwd } = c.req.valid("query");
+    const { cwd, scope } = c.req.valid("query");
 
-    if (!cwd) {
+    const target = resolveScopeTarget(scope, cwd);
+    if (!target.ok) {
       return c.json({ code: "MISSING_CWD", message: "cwd query parameter is required" }, 400);
     }
 
@@ -238,31 +296,32 @@ export function registerWorkflowCrudRoutes(app: ApiApp, rm: RunManager): void {
       return c.json({ code, message }, status as 400);
     }
 
-    const dir = resolveWorkflowsDir(cwd);
-    await fs.mkdir(dir, { recursive: true });
-    const file = resolveWorkflowFile(cwd, name);
+    // Lazily create the target directory (project or global; ADR-002) on first write.
+    await fs.mkdir(target.dir, { recursive: true });
+    const file = resolveWorkflowFileInDir(target.dir, name);
 
     if (await fileExists(file)) {
       return c.json({ code: "WORKFLOW_EXISTS", message: `Workflow already exists: ${name}` }, 409);
     }
 
     await writeJsonAtomic(file, workflowData);
-    return c.json({ name, path: file, workflow: workflowData }, 201);
+    return c.json({ name, path: file, scope: target.scope, workflow: workflowData }, 201);
   });
 
   // PUT /workflows/:name — update / rename
   app.openapi(updateWorkflowRoute, async (c) => {
     const { name } = c.req.valid("param");
-    const { cwd } = c.req.valid("query");
+    const { cwd, scope } = c.req.valid("query");
 
-    if (!cwd) {
+    const target = resolveScopeTarget(scope, cwd);
+    if (!target.ok) {
       return c.json({ code: "MISSING_CWD", message: "cwd query parameter is required" }, 400);
     }
 
     const body = c.req.valid("json");
     const { name: newName, workflow: workflowData } = body;
 
-    const file = resolveWorkflowFile(cwd, name);
+    const file = resolveWorkflowFileInDir(target.dir, name);
 
     if (!await fileExists(file)) {
       return c.json({ code: "NOT_FOUND", message: `Workflow not found: ${name}` }, 404);
@@ -289,7 +348,7 @@ export function registerWorkflowCrudRoutes(app: ApiApp, rm: RunManager): void {
     }
 
     const targetName = newName ?? name;
-    const targetFile = resolveWorkflowFile(cwd, targetName);
+    const targetFile = resolveWorkflowFileInDir(target.dir, targetName);
 
     if (isRename && await fileExists(targetFile)) {
       return c.json({ code: "WORKFLOW_EXISTS", message: `Workflow already exists: ${newName}` }, 409);
@@ -301,19 +360,20 @@ export function registerWorkflowCrudRoutes(app: ApiApp, rm: RunManager): void {
       await fs.unlink(file);
     }
 
-    return c.json({ name: targetName, path: targetFile, workflow: workflowData }, 200);
+    return c.json({ name: targetName, path: targetFile, scope: target.scope, workflow: workflowData }, 200);
   });
 
   // DELETE /workflows/:name — delete
   app.openapi(deleteWorkflowRoute, async (c) => {
     const { name } = c.req.valid("param");
-    const { cwd } = c.req.valid("query");
+    const { cwd, scope } = c.req.valid("query");
 
-    if (!cwd) {
+    const target = resolveScopeTarget(scope, cwd);
+    if (!target.ok) {
       return c.json({ code: "MISSING_CWD", message: "cwd query parameter is required" }, 400);
     }
 
-    const file = resolveWorkflowFile(cwd, name);
+    const file = resolveWorkflowFileInDir(target.dir, name);
 
     if (!await fileExists(file)) {
       return c.json({ code: "NOT_FOUND", message: `Workflow not found: ${name}` }, 404);
@@ -329,6 +389,6 @@ export function registerWorkflowCrudRoutes(app: ApiApp, rm: RunManager): void {
     }
 
     await fs.unlink(file);
-    return c.json({ deleted: name }, 200);
+    return c.json({ deleted: name, scope: target.scope }, 200);
   });
 }

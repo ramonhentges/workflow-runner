@@ -3,8 +3,13 @@ import { mkdirSync, mkdtempSync, writeFileSync, existsSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { homedir } from "node:os";
 import { createApiApp } from "../app.js";
-import { resolveWorkflowFile } from "./workflow-crud.js";
+import {
+  resolveWorkflowFile,
+  resolveGlobalWorkflowsDir,
+  resolveScopedWorkflowsDir,
+} from "./workflow-crud.js";
 import { WorkflowConfigError } from "../../../domain/workflow.js";
 import type { RunManager } from "../../../infra/daemon/run-manager.js";
 import { asRunId, asRunSlug, type RunSnapshot } from "../../../domain/run.js";
@@ -109,6 +114,26 @@ function makeCwdWithWorkflowsDir(): { cwd: string; wfDir: string; cleanup: () =>
     cwd,
     wfDir,
     cleanup: () => rm(cwd, { recursive: true, force: true }).catch(() => {}),
+  };
+}
+
+/**
+ * Points the global workflows dir (ADR-002) at a temp `XDG_STATE_HOME` so global
+ * scope CRUD can be exercised without touching the real user state directory.
+ * Restores the previous env value on cleanup.
+ */
+function makeTempGlobalState(): { globalDir: string; cleanup: () => Promise<void> } {
+  const stateHome = mkdtempSync(join(tmpdir(), "workflow-crud-global-"));
+  const prev = process.env.XDG_STATE_HOME;
+  process.env.XDG_STATE_HOME = stateHome;
+  const globalDir = resolveGlobalWorkflowsDir();
+  return {
+    globalDir,
+    cleanup: async () => {
+      if (prev === undefined) delete process.env.XDG_STATE_HOME;
+      else process.env.XDG_STATE_HOME = prev;
+      await rm(stateHome, { recursive: true, force: true }).catch(() => {});
+    },
   };
 }
 
@@ -624,6 +649,46 @@ describe("resolveWorkflowFile — containment guard", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Unit tests — scope directory resolution (ADR-002 / ADR-003)
+// ---------------------------------------------------------------------------
+
+describe("resolveGlobalWorkflowsDir", () => {
+  it("honors XDG_STATE_HOME", () => {
+    const dir = resolveGlobalWorkflowsDir({ XDG_STATE_HOME: "/xdg/state" });
+    expect(dir).toBe(join("/xdg/state", "workflow-runner", "workflows"));
+  });
+
+  it("falls back to ~/.local/state/workflow-runner/workflows", () => {
+    const dir = resolveGlobalWorkflowsDir({});
+    expect(dir).toBe(join(homedir(), ".local", "state", "workflow-runner", "workflows"));
+  });
+});
+
+describe("resolveScopedWorkflowsDir", () => {
+  it("returns the global dir for 'global', ignoring cwd", () => {
+    const env = { XDG_STATE_HOME: "/xdg/state" };
+    const dir = resolveScopedWorkflowsDir("global", undefined, env);
+    expect(dir).toBe(resolveGlobalWorkflowsDir(env));
+  });
+
+  it("ignores cwd when scope is 'global'", () => {
+    const env = { XDG_STATE_HOME: "/xdg/state" };
+    expect(resolveScopedWorkflowsDir("global", "/some/project", env)).toBe(
+      resolveGlobalWorkflowsDir(env),
+    );
+  });
+
+  it("throws WorkflowConfigError for 'project' without a cwd", () => {
+    expect(() => resolveScopedWorkflowsDir("project", undefined)).toThrow(WorkflowConfigError);
+  });
+
+  it("returns <cwd>/workflows for 'project'", () => {
+    const dir = resolveScopedWorkflowsDir("project", "/p");
+    expect(dir).toBe(join("/p", "workflows"));
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Integration tests — create → list → read → update → delete lifecycle
 // ---------------------------------------------------------------------------
 
@@ -715,6 +780,283 @@ describe("Workflow CRUD lifecycle — integration", () => {
     expect(newRes.status).toBe(200);
     const body = await newRes.json() as { name: string };
     expect(body.name).toBe("renamed");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Scope-aware CRUD — global scope (ADR-002 / ADR-003)
+// ---------------------------------------------------------------------------
+
+describe("Scope-aware CRUD — global scope", () => {
+  let globalDir: string;
+  let cleanup: () => Promise<void>;
+
+  beforeEach(() => {
+    const g = makeTempGlobalState();
+    globalDir = g.globalDir;
+    cleanup = g.cleanup;
+  });
+
+  afterEach(async () => {
+    await cleanup();
+  });
+
+  it("POST ?scope=global creates the file in the global dir and returns scope:global (no cwd)", async () => {
+    const app = createApiApp(makePartialRm());
+    const res = await app.request(
+      "/workflows?scope=global",
+      jsonRequest("POST", "", { name: "deploy", workflow: VALID_WORKFLOW }),
+    );
+    expect(res.status).toBe(201);
+    const body = await res.json() as Record<string, unknown>;
+    expect(body.name).toBe("deploy");
+    expect(body.scope).toBe("global");
+    expect(body.path).toBe(join(globalDir, "deploy.json"));
+    expect(existsSync(join(globalDir, "deploy.json"))).toBe(true);
+  });
+
+  it("lazily creates the global dir on first create", async () => {
+    expect(existsSync(globalDir)).toBe(false);
+    const app = createApiApp(makePartialRm());
+    const res = await app.request(
+      "/workflows?scope=global",
+      jsonRequest("POST", "", { name: "deploy", workflow: VALID_WORKFLOW }),
+    );
+    expect(res.status).toBe(201);
+    expect(existsSync(globalDir)).toBe(true);
+  });
+
+  it("GET ?scope=global reads a global workflow with no cwd supplied", async () => {
+    mkdirSync(globalDir, { recursive: true });
+    writeFileSync(join(globalDir, "deploy.json"), JSON.stringify(VALID_WORKFLOW));
+    const app = createApiApp(makePartialRm());
+    const res = await app.request("/workflows/deploy?scope=global");
+    expect(res.status).toBe(200);
+    const body = await res.json() as Record<string, unknown>;
+    expect(body.name).toBe("deploy");
+    expect(body.scope).toBe("global");
+    expect(body.path).toBe(join(globalDir, "deploy.json"));
+  });
+
+  it("POST ?scope=global for an existing global name returns 409 WORKFLOW_EXISTS", async () => {
+    mkdirSync(globalDir, { recursive: true });
+    writeFileSync(join(globalDir, "deploy.json"), JSON.stringify(VALID_WORKFLOW));
+    const app = createApiApp(makePartialRm());
+    const res = await app.request(
+      "/workflows?scope=global",
+      jsonRequest("POST", "", { name: "deploy", workflow: VALID_WORKFLOW }),
+    );
+    expect(res.status).toBe(409);
+    const body = await res.json() as Record<string, unknown>;
+    expect(body.code).toBe("WORKFLOW_EXISTS");
+  });
+
+  it("creating global 'deploy' succeeds when project 'deploy' already exists (no false 409)", async () => {
+    const { cwd, wfDir, cleanup: cleanupCwd } = makeCwdWithWorkflowsDir();
+    try {
+      writeFileSync(join(wfDir, "deploy.json"), JSON.stringify(VALID_WORKFLOW));
+      const app = createApiApp(makePartialRm());
+      const res = await app.request(
+        "/workflows?scope=global",
+        jsonRequest("POST", "", { name: "deploy", workflow: VALID_WORKFLOW }),
+      );
+      expect(res.status).toBe(201);
+      const body = await res.json() as Record<string, unknown>;
+      expect(body.scope).toBe("global");
+      expect(existsSync(join(globalDir, "deploy.json"))).toBe(true);
+    } finally {
+      await cleanupCwd();
+    }
+  });
+
+  it("DELETE ?scope=global removes the global file and returns scope:global", async () => {
+    mkdirSync(globalDir, { recursive: true });
+    writeFileSync(join(globalDir, "deploy.json"), JSON.stringify(VALID_WORKFLOW));
+    const app = createApiApp(makePartialRm());
+    const res = await app.request("/workflows/deploy?scope=global", { method: "DELETE" });
+    expect(res.status).toBe(200);
+    const body = await res.json() as Record<string, unknown>;
+    expect(body.deleted).toBe("deploy");
+    expect(body.scope).toBe("global");
+    expect(existsSync(join(globalDir, "deploy.json"))).toBe(false);
+  });
+
+  it("DELETE ?scope=global returns 404 when the global file is absent", async () => {
+    const app = createApiApp(makePartialRm());
+    const res = await app.request("/workflows/missing?scope=global", { method: "DELETE" });
+    expect(res.status).toBe(404);
+    const body = await res.json() as Record<string, unknown>;
+    expect(body.code).toBe("NOT_FOUND");
+  });
+
+  it("PUT in-place update within global scope returns 200 with scope:global", async () => {
+    mkdirSync(globalDir, { recursive: true });
+    writeFileSync(join(globalDir, "deploy.json"), JSON.stringify(VALID_WORKFLOW));
+    const app = createApiApp(makePartialRm());
+    const res = await app.request(
+      "/workflows/deploy?scope=global",
+      jsonRequest("PUT", "", { workflow: UPDATED_WORKFLOW }),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json() as Record<string, unknown>;
+    expect(body.name).toBe("deploy");
+    expect(body.scope).toBe("global");
+  });
+
+  it("PUT rename within global scope returns 409 WORKFLOW_EXISTS when target global name exists", async () => {
+    mkdirSync(globalDir, { recursive: true });
+    writeFileSync(join(globalDir, "source.json"), JSON.stringify(VALID_WORKFLOW));
+    writeFileSync(join(globalDir, "existing.json"), JSON.stringify(VALID_WORKFLOW));
+    const app = createApiApp(makePartialRm());
+    const res = await app.request(
+      "/workflows/source?scope=global",
+      jsonRequest("PUT", "", { name: "existing", workflow: UPDATED_WORKFLOW }),
+    );
+    expect(res.status).toBe(409);
+    const body = await res.json() as Record<string, unknown>;
+    expect(body.code).toBe("WORKFLOW_EXISTS");
+  });
+
+  it("PUT rename within global scope succeeds and moves the file", async () => {
+    mkdirSync(globalDir, { recursive: true });
+    writeFileSync(join(globalDir, "old-global.json"), JSON.stringify(VALID_WORKFLOW));
+    const app = createApiApp(makePartialRm());
+    const res = await app.request(
+      "/workflows/old-global?scope=global",
+      jsonRequest("PUT", "", { name: "new-global", workflow: UPDATED_WORKFLOW }),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json() as Record<string, unknown>;
+    expect(body.name).toBe("new-global");
+    expect(body.scope).toBe("global");
+    expect(existsSync(join(globalDir, "new-global.json"))).toBe(true);
+    expect(existsSync(join(globalDir, "old-global.json"))).toBe(false);
+  });
+
+  it("path-traversal safety holds for global scope (POST ../escape rejected)", async () => {
+    const app = createApiApp(makePartialRm());
+    const res = await app.request(
+      "/workflows?scope=global",
+      jsonRequest("POST", "", { name: "../escape", workflow: VALID_WORKFLOW }),
+    );
+    expect(res.status).toBe(400);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Scope-aware CRUD — default scope and project MISSING_CWD (ADR-003)
+// ---------------------------------------------------------------------------
+
+describe("Scope-aware CRUD — default project scope", () => {
+  it("POST with no scope writes to <cwd>/workflows and returns scope:project (unchanged)", async () => {
+    const { cwd, cleanup } = makeTempCwd();
+    try {
+      const app = createApiApp(makePartialRm());
+      const res = await app.request(
+        `/workflows?cwd=${encodeURIComponent(cwd)}`,
+        jsonRequest("POST", "", { name: "who-is", workflow: VALID_WORKFLOW }),
+      );
+      expect(res.status).toBe(201);
+      const body = await res.json() as Record<string, unknown>;
+      expect(body.scope).toBe("project");
+      expect(existsSync(join(cwd, "workflows", "who-is.json"))).toBe(true);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("GET with no scope returns scope:project", async () => {
+    const { cwd, wfDir, cleanup } = makeCwdWithWorkflowsDir();
+    try {
+      writeFileSync(join(wfDir, "who-is.json"), JSON.stringify(VALID_WORKFLOW));
+      const app = createApiApp(makePartialRm());
+      const res = await app.request(`/workflows/who-is?cwd=${encodeURIComponent(cwd)}`);
+      expect(res.status).toBe(200);
+      const body = await res.json() as Record<string, unknown>;
+      expect(body.scope).toBe("project");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("POST ?scope=project without cwd returns 400 MISSING_CWD", async () => {
+    const app = createApiApp(makePartialRm());
+    const res = await app.request(
+      "/workflows?scope=project",
+      jsonRequest("POST", "", { name: "who-is", workflow: VALID_WORKFLOW }),
+    );
+    expect(res.status).toBe(400);
+    const body = await res.json() as Record<string, unknown>;
+    expect(body.code).toBe("MISSING_CWD");
+  });
+
+  it("GET ?scope=project without cwd returns 400 MISSING_CWD", async () => {
+    const app = createApiApp(makePartialRm());
+    const res = await app.request("/workflows/who-is?scope=project");
+    expect(res.status).toBe(400);
+    const body = await res.json() as Record<string, unknown>;
+    expect(body.code).toBe("MISSING_CWD");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Run-active guard — global scope (ADR-003)
+// ---------------------------------------------------------------------------
+
+describe("Run-active guard — global scope", () => {
+  let globalDir: string;
+  let cleanup: () => Promise<void>;
+
+  beforeEach(() => {
+    const g = makeTempGlobalState();
+    globalDir = g.globalDir;
+    cleanup = g.cleanup;
+  });
+
+  afterEach(async () => {
+    await cleanup();
+  });
+
+  it("DELETE ?scope=global returns 409 WORKFLOW_RUN_ACTIVE when a run references that global file", async () => {
+    mkdirSync(globalDir, { recursive: true });
+    const wfPath = join(globalDir, "active-global.json");
+    writeFileSync(wfPath, JSON.stringify(VALID_WORKFLOW));
+    const snap = makeRunningSnapshot(wfPath);
+    const app = createApiApp(makePartialRm([snap]));
+    const res = await app.request("/workflows/active-global?scope=global", { method: "DELETE" });
+    expect(res.status).toBe(409);
+    const body = await res.json() as Record<string, unknown>;
+    expect(body.code).toBe("WORKFLOW_RUN_ACTIVE");
+    expect(existsSync(wfPath)).toBe(true);
+  });
+
+  it("PUT rename of a global workflow with an active run returns 409 WORKFLOW_RUN_ACTIVE", async () => {
+    mkdirSync(globalDir, { recursive: true });
+    const wfPath = join(globalDir, "active-global.json");
+    writeFileSync(wfPath, JSON.stringify(VALID_WORKFLOW));
+    const snap = makeRunningSnapshot(wfPath);
+    const app = createApiApp(makePartialRm([snap]));
+    const res = await app.request(
+      "/workflows/active-global?scope=global",
+      jsonRequest("PUT", "", { name: "renamed-global", workflow: UPDATED_WORKFLOW }),
+    );
+    expect(res.status).toBe(409);
+    const body = await res.json() as Record<string, unknown>;
+    expect(body.code).toBe("WORKFLOW_RUN_ACTIVE");
+    expect(existsSync(wfPath)).toBe(true);
+  });
+
+  it("in-place PUT of a global workflow with an active run is allowed (no rename)", async () => {
+    mkdirSync(globalDir, { recursive: true });
+    const wfPath = join(globalDir, "active-global.json");
+    writeFileSync(wfPath, JSON.stringify(VALID_WORKFLOW));
+    const snap = makeRunningSnapshot(wfPath);
+    const app = createApiApp(makePartialRm([snap]));
+    const res = await app.request(
+      "/workflows/active-global?scope=global",
+      jsonRequest("PUT", "", { workflow: UPDATED_WORKFLOW }),
+    );
+    expect(res.status).toBe(200);
   });
 });
 

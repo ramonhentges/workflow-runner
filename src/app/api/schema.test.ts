@@ -17,6 +17,8 @@ import {
   HealthReportSchema,
   DiscoveryFileSchema,
   WorkflowListSchema,
+  WorkflowItemSchema,
+  WorkflowScopeSchema,
   WorkflowsQuerySchema,
   WorkflowNameParamSchema,
   WorkflowCreateBodySchema,
@@ -423,10 +425,71 @@ describe("WorkflowsQuerySchema", () => {
     expect(result.success).toBe(true);
   });
 
-  it("accepts empty object (cwd is optional)", () => {
+  it("accepts empty object (cwd and scope are optional)", () => {
     const result = WorkflowsQuerySchema.safeParse({});
     expect(result.success).toBe(true);
-    if (result.success) expect(result.data.cwd).toBeUndefined();
+    if (result.success) {
+      expect(result.data.cwd).toBeUndefined();
+      expect(result.data.scope).toBeUndefined();
+    }
+  });
+
+  it("parses with scope omitted (back-compat)", () => {
+    const result = WorkflowsQuerySchema.safeParse({ cwd: "/p" });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.scope).toBeUndefined();
+  });
+
+  it("parses with scope: 'global'", () => {
+    const result = WorkflowsQuerySchema.safeParse({ scope: "global" });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.scope).toBe("global");
+  });
+
+  it("rejects an unknown scope value", () => {
+    const result = WorkflowsQuerySchema.safeParse({ scope: "team" });
+    expect(result.success).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// WorkflowScope
+// ---------------------------------------------------------------------------
+
+describe("WorkflowScopeSchema", () => {
+  it("accepts 'global'", () => {
+    expect(WorkflowScopeSchema.safeParse("global").success).toBe(true);
+  });
+
+  it("accepts 'project'", () => {
+    expect(WorkflowScopeSchema.safeParse("project").success).toBe(true);
+  });
+
+  it("rejects 'team'", () => {
+    expect(WorkflowScopeSchema.safeParse("team").success).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// WorkflowItem
+// ---------------------------------------------------------------------------
+
+describe("WorkflowItemSchema", () => {
+  it("accepts an item with scope", () => {
+    const result = WorkflowItemSchema.safeParse({
+      name: "who-is.json",
+      path: "/home/user/project/workflows/who-is.json",
+      scope: "project",
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("requires scope (an item missing scope fails parsing)", () => {
+    const result = WorkflowItemSchema.safeParse({
+      name: "who-is.json",
+      path: "/home/user/project/workflows/who-is.json",
+    });
+    expect(result.success).toBe(false);
   });
 });
 
@@ -438,7 +501,11 @@ describe("WorkflowListSchema", () => {
   it("accepts a valid workflow list", () => {
     const result = WorkflowListSchema.safeParse({
       workflows: [
-        { name: "who-is.json", path: "/home/user/project/workflows/who-is.json" },
+        {
+          name: "who-is.json",
+          path: "/home/user/project/workflows/who-is.json",
+          scope: "project",
+        },
       ],
     });
     expect(result.success).toBe(true);
@@ -456,14 +523,21 @@ describe("WorkflowListSchema", () => {
 
   it("rejects a workflow item missing name", () => {
     const result = WorkflowListSchema.safeParse({
-      workflows: [{ path: "/home/user/wf.json" }],
+      workflows: [{ path: "/home/user/wf.json", scope: "project" }],
     });
     expect(result.success).toBe(false);
   });
 
   it("rejects a workflow item missing path", () => {
     const result = WorkflowListSchema.safeParse({
-      workflows: [{ name: "wf.json" }],
+      workflows: [{ name: "wf.json", scope: "project" }],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a workflow item missing scope", () => {
+    const result = WorkflowListSchema.safeParse({
+      workflows: [{ name: "wf.json", path: "/home/user/wf.json" }],
     });
     expect(result.success).toBe(false);
   });
@@ -565,6 +639,7 @@ describe("WorkflowDocSchema", () => {
     const doc = {
       name: "who-is",
       path: "/home/user/project/workflows/who-is.json",
+      scope: "project",
       workflow: { id: "who-is", name: "Who Is?", steps: [] },
     };
     const result = WorkflowDocSchema.safeParse(doc);
@@ -572,17 +647,37 @@ describe("WorkflowDocSchema", () => {
     if (result.success) {
       expect(result.data.name).toBe("who-is");
       expect(result.data.path).toBe("/home/user/project/workflows/who-is.json");
+      expect(result.data.scope).toBe("project");
       expect(result.data.workflow).toEqual(doc.workflow);
     }
   });
 
+  it("round-trips a global-scoped read-one response", () => {
+    const doc = {
+      name: "deploy",
+      path: "/home/user/.local/state/workflow-runner/workflows/deploy.json",
+      scope: "global",
+      workflow: { id: "deploy", name: "Deploy", steps: [] },
+    };
+    const result = WorkflowDocSchema.safeParse(doc);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.scope).toBe("global");
+    }
+  });
+
   it("rejects a doc missing name", () => {
-    const doc = { path: "/wf.json", workflow: {} };
+    const doc = { path: "/wf.json", scope: "project", workflow: {} };
     expect(WorkflowDocSchema.safeParse(doc).success).toBe(false);
   });
 
   it("rejects a doc missing path", () => {
-    const doc = { name: "wf", workflow: {} };
+    const doc = { name: "wf", scope: "project", workflow: {} };
+    expect(WorkflowDocSchema.safeParse(doc).success).toBe(false);
+  });
+
+  it("rejects a doc missing scope", () => {
+    const doc = { name: "wf", path: "/wf.json", workflow: {} };
     expect(WorkflowDocSchema.safeParse(doc).success).toBe(false);
   });
 });

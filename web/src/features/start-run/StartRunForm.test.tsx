@@ -141,8 +141,8 @@ describe('useWorkflows', () => {
       http.get(`${BASE}/workflows`, () =>
         HttpResponse.json({
           workflows: [
-            { name: 'wf1.json', path: '/p/workflows/wf1.json' },
-            { name: 'wf2.json', path: '/p/workflows/wf2.json' },
+            { name: 'wf1.json', path: '/p/workflows/wf1.json', scope: 'project' },
+            { name: 'wf2.json', path: '/p/workflows/wf2.json', scope: 'project' },
           ],
         }),
       ),
@@ -270,7 +270,9 @@ describe('StartRunForm — picker selection', () => {
     server.use(
       http.get(`${BASE}/workflows`, () =>
         HttpResponse.json({
-          workflows: [{ name: 'wf1.json', path: '/projects/myapp/workflows/wf1.json' }],
+          workflows: [
+            { name: 'wf1.json', path: '/projects/myapp/workflows/wf1.json', scope: 'project' },
+          ],
         }),
       ),
       http.post(`${BASE}/runs`, async ({ request }) => {
@@ -282,16 +284,92 @@ describe('StartRunForm — picker selection', () => {
     renderForm()
 
     // Wait for the shadcn Select trigger (Radix combobox) to appear, then
-    // open it and choose the option by its visible workflow name.
+    // open it and choose the option by its visible workflow name. The option's
+    // accessible name now also carries the scope badge text, so match loosely.
     const trigger = await screen.findByRole('combobox')
     await user.click(trigger)
-    await user.click(await screen.findByRole('option', { name: 'wf1.json' }))
+    await user.click(await screen.findByRole('option', { name: /wf1\.json/ }))
 
     await user.click(screen.getByRole('button', { name: /start run/i }))
 
     await waitFor(() => {
       expect(capturedBody).toEqual({
         workflowPath: '/projects/myapp/workflows/wf1.json',
+        cwd: '/projects/myapp',
+      })
+    })
+  })
+})
+
+// ─── Unit/Integration: scoped picker ────────────────────────────────────────
+
+describe('StartRunForm — scoped picker', () => {
+  test('lists both global and project workflows, each showing its scope', async () => {
+    const user = userEvent.setup()
+    useCwdStore.getState().addCwd('proj', '/projects/myapp')
+
+    server.use(
+      http.get(`${BASE}/workflows`, () =>
+        HttpResponse.json({
+          workflows: [
+            { name: 'proj-wf.json', path: '/projects/myapp/workflows/proj-wf.json', scope: 'project' },
+            { name: 'global-wf.json', path: '/home/u/.local/state/workflow-runner/workflows/global-wf.json', scope: 'global' },
+          ],
+        }),
+      ),
+    )
+
+    renderForm()
+
+    const trigger = await screen.findByRole('combobox')
+    await user.click(trigger)
+
+    const projectOption = await screen.findByRole('option', { name: /proj-wf\.json/ })
+    const globalOption = await screen.findByRole('option', { name: /global-wf\.json/ })
+    expect(projectOption).toBeInTheDocument()
+    expect(globalOption).toBeInTheDocument()
+
+    // Each option carries a scope badge as the disambiguator.
+    const badges = screen.getAllByTestId('workflow-scope-badge')
+    const scopes = badges.map(b => b.getAttribute('data-scope'))
+    expect(scopes).toContain('project')
+    expect(scopes).toContain('global')
+    expect(projectOption).toHaveTextContent('Project')
+    expect(globalOption).toHaveTextContent('Global')
+  })
+
+  test('selecting a global workflow submits its path with the active cwd', async () => {
+    const user = userEvent.setup()
+    useCwdStore.getState().addCwd('proj', '/projects/myapp')
+
+    let capturedBody: unknown
+    server.use(
+      http.get(`${BASE}/workflows`, () =>
+        HttpResponse.json({
+          workflows: [
+            { name: 'proj-wf.json', path: '/projects/myapp/workflows/proj-wf.json', scope: 'project' },
+            { name: 'global-wf.json', path: '/home/u/.local/state/workflow-runner/workflows/global-wf.json', scope: 'global' },
+          ],
+        }),
+      ),
+      http.post(`${BASE}/runs`, async ({ request }) => {
+        capturedBody = await request.json()
+        return HttpResponse.json({ runId: 'run-global', slug: 'slug-global' })
+      }),
+    )
+
+    renderForm()
+
+    const trigger = await screen.findByRole('combobox')
+    await user.click(trigger)
+    await user.click(await screen.findByRole('option', { name: /global-wf\.json/ }))
+
+    await user.click(screen.getByRole('button', { name: /start run/i }))
+
+    // The global item's absolute path runs against the active cwd, unchanged.
+    await waitFor(() => {
+      expect(capturedBody).toEqual({
+        workflowPath: '/home/u/.local/state/workflow-runner/workflows/global-wf.json',
         cwd: '/projects/myapp',
       })
     })
@@ -308,7 +386,9 @@ describe('StartRunForm — select/manual mutual exclusion', () => {
     server.use(
       http.get(`${BASE}/workflows`, () =>
         HttpResponse.json({
-          workflows: [{ name: 'wf1.json', path: '/projects/myapp/workflows/wf1.json' }],
+          workflows: [
+            { name: 'wf1.json', path: '/projects/myapp/workflows/wf1.json', scope: 'project' },
+          ],
         }),
       ),
     )
@@ -321,7 +401,7 @@ describe('StartRunForm — select/manual mutual exclusion', () => {
 
     const trigger = await screen.findByRole('combobox')
     await user.click(trigger)
-    await user.click(await screen.findByRole('option', { name: 'wf1.json' }))
+    await user.click(await screen.findByRole('option', { name: /wf1\.json/ }))
 
     // The Select now reflects the chosen workflow and the manual path is cleared.
     expect(trigger).toHaveTextContent('wf1.json')
@@ -335,7 +415,9 @@ describe('StartRunForm — select/manual mutual exclusion', () => {
     server.use(
       http.get(`${BASE}/workflows`, () =>
         HttpResponse.json({
-          workflows: [{ name: 'wf1.json', path: '/projects/myapp/workflows/wf1.json' }],
+          workflows: [
+            { name: 'wf1.json', path: '/projects/myapp/workflows/wf1.json', scope: 'project' },
+          ],
         }),
       ),
     )
@@ -344,7 +426,7 @@ describe('StartRunForm — select/manual mutual exclusion', () => {
 
     const trigger = await screen.findByRole('combobox')
     await user.click(trigger)
-    await user.click(await screen.findByRole('option', { name: 'wf1.json' }))
+    await user.click(await screen.findByRole('option', { name: /wf1\.json/ }))
     expect(trigger).toHaveTextContent('wf1.json')
 
     const manual = screen.getByLabelText(/enter a path manually/i)
@@ -367,8 +449,8 @@ describe('StartRunForm — integration: navigation', () => {
       http.get(`${BASE}/workflows`, () =>
         HttpResponse.json({
           workflows: [
-            { name: 'alpha.json', path: '/projects/myapp/workflows/alpha.json' },
-            { name: 'beta.json', path: '/projects/myapp/workflows/beta.json' },
+            { name: 'alpha.json', path: '/projects/myapp/workflows/alpha.json', scope: 'project' },
+            { name: 'beta.json', path: '/projects/myapp/workflows/beta.json', scope: 'project' },
           ],
         }),
       ),
@@ -381,7 +463,7 @@ describe('StartRunForm — integration: navigation', () => {
 
     const trigger = await screen.findByRole('combobox')
     await user.click(trigger)
-    await user.click(await screen.findByRole('option', { name: 'alpha.json' }))
+    await user.click(await screen.findByRole('option', { name: /alpha\.json/ }))
     await user.click(screen.getByRole('button', { name: /start run/i }))
 
     expect(await screen.findByTestId('run-view-page')).toBeInTheDocument()

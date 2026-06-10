@@ -3,6 +3,7 @@ import { useNavigate } from '@tanstack/react-router'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useCwdStore } from '@/stores/cwd-store'
 import { startRun } from '@/lib/api/client'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -14,7 +15,16 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import type { WorkflowScope } from '@/lib/api/types'
 import { useWorkflows } from './useWorkflows'
+
+// The picker merges global and project workflows (ADR-001); a global and a
+// project workflow can share a name, so each option carries a scope badge as the
+// user-facing disambiguator. Selecting a global item still starts a run against
+// the active cwd — the start contract is unchanged.
+function scopeLabel(scope: WorkflowScope): string {
+  return scope === 'global' ? 'Global' : 'Project'
+}
 
 export function StartRunForm() {
   const activeCwd = useCwdStore(state => state.activeCwd())
@@ -96,7 +106,16 @@ export function StartRunForm() {
                 <SelectContent>
                   {workflows.map(wf => (
                     <SelectItem key={wf.path} value={wf.path}>
-                      {wf.name}
+                      <span className="flex items-center gap-2">
+                        <span>{wf.name}</span>
+                        <Badge
+                          variant={wf.scope === 'global' ? 'secondary' : 'outline'}
+                          data-testid="workflow-scope-badge"
+                          data-scope={wf.scope}
+                        >
+                          {scopeLabel(wf.scope)}
+                        </Badge>
+                      </span>
                     </SelectItem>
                   ))}
                 </SelectContent>

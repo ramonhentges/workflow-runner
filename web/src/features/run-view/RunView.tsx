@@ -13,8 +13,33 @@ interface RunViewProps {
 export function RunView({ runId }: RunViewProps) {
   const { vm, sendInput } = useAttach(runId)
 
+  // Isolated runs (ADR-004) carry a worktree path + branch on the snapshot;
+  // non-isolated runs leave both unset and render nothing extra.
+  const { worktreePath, branch } = vm.snapshot ?? {}
+  const isolated = Boolean(worktreePath || branch)
+
   return (
     <div data-testid="run-view" className="flex h-full min-h-0 flex-col">
+      {isolated && (
+        <div
+          data-testid="isolation-info"
+          className="flex flex-wrap gap-x-6 gap-y-1 border-b px-4 py-2 text-sm text-muted-foreground"
+        >
+          {branch && (
+            <span>
+              Branch: <span data-testid="isolation-branch" className="font-mono text-foreground">{branch}</span>
+            </span>
+          )}
+          {worktreePath && (
+            <span>
+              Worktree:{' '}
+              <span data-testid="isolation-worktree" className="font-mono text-foreground">
+                {worktreePath}
+              </span>
+            </span>
+          )}
+        </div>
+      )}
       {vm.error && (
         <Alert
           data-testid="socket-error-notice"

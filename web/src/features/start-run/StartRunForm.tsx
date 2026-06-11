@@ -15,7 +15,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import type { WorkflowScope } from '@/lib/api/types'
+import type { StartRunRequest, WorkflowScope } from '@/lib/api/types'
 import { useWorkflows } from './useWorkflows'
 
 // The picker merges global and project workflows (ADR-001); a global and a
@@ -33,13 +33,14 @@ export function StartRunForm() {
 
   const [selectedPath, setSelectedPath] = useState('')
   const [manualPath, setManualPath] = useState('')
+  const [branch, setBranch] = useState('')
   const [validationError, setValidationError] = useState('')
 
   const { data: workflowsData, isLoading: workflowsLoading, isError: workflowsError } = useWorkflows()
   const workflows = workflowsData?.workflows ?? []
 
   const mutation = useMutation({
-    mutationFn: (req: { workflowPath: string; cwd: string }) => startRun(req),
+    mutationFn: (req: StartRunRequest) => startRun(req),
     onSuccess: async data => {
       await queryClient.invalidateQueries({ queryKey: ['runs'] })
       await navigate({ to: '/runs/$runId', params: { runId: data.runId } })
@@ -67,7 +68,15 @@ export function StartRunForm() {
       return
     }
 
-    mutation.mutate({ workflowPath, cwd: activeCwd!.path })
+    // A non-empty branch opts the run into git-worktree isolation (ADR-001);
+    // leaving it blank starts a normal run in the active cwd.
+    const trimmedBranch = branch.trim()
+    const req: StartRunRequest = {
+      workflowPath,
+      cwd: activeCwd!.path,
+      ...(trimmedBranch ? { branch: trimmedBranch } : {}),
+    }
+    mutation.mutate(req)
   }
 
   return (
@@ -137,6 +146,23 @@ export function StartRunForm() {
               }}
               placeholder="/path/to/workflow.json"
             />
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="branch-input">Branch (optional)</Label>
+            <Input
+              id="branch-input"
+              value={branch}
+              onChange={e => {
+                setBranch(e.target.value)
+                setValidationError('')
+              }}
+              placeholder="feature/my-branch"
+            />
+            <p className="text-xs text-muted-foreground">
+              Run in an isolated git worktree on this branch. Leave blank to run in the working
+              directory.
+            </p>
           </div>
 
           {validationError && (

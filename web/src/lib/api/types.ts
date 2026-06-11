@@ -48,6 +48,10 @@ export interface RunSummary {
   slug: string
   workflowPath: string
   cwd?: string
+  // Present only for isolated runs (ADR-004): the git worktree the agent ran in
+  // and the branch it was checked out on.
+  worktreePath?: string
+  branch?: string
   currentStepId: string | null
   status: RunStatus
   startedAt: number
@@ -60,6 +64,9 @@ export interface RunDetail {
   slug: string
   workflowPath: string
   cwd?: string
+  // Present only for isolated runs (ADR-004).
+  worktreePath?: string
+  branch?: string
   status: RunStatus
   currentStepId: string | null
   visitedStepIds: string[]
@@ -83,6 +90,9 @@ export interface InputFrame {
 export interface StartRunRequest {
   workflowPath: string
   cwd: string
+  // Opt-in isolation (ADR-001): a non-empty branch requests a per-run git
+  // worktree. Omitted ⇒ a normal, non-isolated run in `cwd`.
+  branch?: string
 }
 
 // Scope discriminator mirroring the server `WorkflowScope` (src/app/api/schema.ts,

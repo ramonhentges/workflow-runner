@@ -376,6 +376,66 @@ describe('RunView integration (fake WebSocket + MSW)', () => {
     expect(screen.getByTestId('retry-button')).toBeInTheDocument()
   })
 
+  test('renders worktree path and branch for an isolated run snapshot', async () => {
+    renderRunView('run-isolated')
+    const ws = latestWs()
+
+    act(() => {
+      ws.receive({
+        type: 'snapshot',
+        snapshot: {
+          id: 'run-isolated',
+          slug: 'iso-slug',
+          workflowPath: '/tmp/wf.json',
+          cwd: '/repo',
+          worktreePath: '/repo-feature-x',
+          branch: 'feature/x',
+          status: 'running',
+          currentStepId: 'step-1',
+          visitedStepIds: [],
+          startedAt: 1000,
+          endedAt: null,
+          attachedCount: 1,
+        },
+      })
+    })
+
+    await waitFor(() => {
+      expect(screen.getByTestId('isolation-info')).toBeInTheDocument()
+    })
+    expect(screen.getByTestId('isolation-branch')).toHaveTextContent('feature/x')
+    expect(screen.getByTestId('isolation-worktree')).toHaveTextContent('/repo-feature-x')
+  })
+
+  test('renders no isolation info for a non-isolated run snapshot', async () => {
+    renderRunView('run-plain')
+    const ws = latestWs()
+
+    act(() => {
+      ws.receive({
+        type: 'snapshot',
+        snapshot: {
+          id: 'run-plain',
+          slug: 'plain-slug',
+          workflowPath: '/tmp/wf.json',
+          cwd: '/repo',
+          status: 'running',
+          currentStepId: 'step-1',
+          visitedStepIds: [],
+          startedAt: 1000,
+          endedAt: null,
+          attachedCount: 1,
+        },
+      })
+    })
+
+    // Give the snapshot a chance to apply, then assert the panel is absent.
+    await waitFor(() => {
+      expect(screen.getByTestId('run-view')).toBeInTheDocument()
+    })
+    expect(screen.queryByTestId('isolation-info')).not.toBeInTheDocument()
+  })
+
   test('snapshot → stream event → interactive(true) → status(completed) → summary panel', async () => {
     renderRunView('run-seq')
     const ws = latestWs()

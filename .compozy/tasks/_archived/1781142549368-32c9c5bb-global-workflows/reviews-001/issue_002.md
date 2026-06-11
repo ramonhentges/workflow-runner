@@ -3,7 +3,7 @@ provider: manual
 pr:
 round: 1
 round_created_at: 2026-06-10T20:35:32Z
-status: pending
+status: resolved
 file: web/src/features/workflows/WorkflowList.tsx
 line: 42
 severity: medium
@@ -41,5 +41,23 @@ matching the row `key`. Apply the same to `startingName`.
 
 ## Triage
 
-- Decision: `UNREVIEWED`
-- Notes:
+- Decision: `VALID`
+- Severity: medium
+- Root cause: The row `key` and `data-testid` are derived from `scope + bareName`
+  (`WorkflowList.tsx:179`), but the per-row interaction state — `confirmingName`
+  and `startingName` — stores a bare `bareName` only (`:42,44`). The per-row
+  predicates compare against that bare name (`isConfirming = confirmingName ===
+  bareName`, `isStarting = startMutation.isPending && startingName === bareName`,
+  `:173-175`). When a global and a project workflow share a bare name, the two
+  rows compute the same predicate result, so confirming-delete / "Starting…" /
+  "Deleting…" state lights up on **both** rows at once. Data integrity is intact
+  (each row's `mutate` carries its own `scope`/`path`), but the ambiguous UI
+  contradicts the PRD's collision-disambiguation requirement.
+- Fix approach: Key the interaction state by the same composite the row `key`
+  uses. Introduce a `rowKey = `${scope}-${bareName}`` per row, rename the two
+  state slots to `confirmingKey` / `startingKey`, and compare/set against
+  `rowKey`. This makes the active-row state unique per scope+name pair so only
+  the clicked row enters the confirming/starting state.
+- Tests: Add a regression test asserting that, for two same-named rows in
+  different scopes, clicking Delete (and Run) on one row activates only that
+  row's state and leaves the other row's actions in their default state.

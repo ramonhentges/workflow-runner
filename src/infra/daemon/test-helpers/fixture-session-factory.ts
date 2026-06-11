@@ -1,3 +1,6 @@
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+
 import type {
   RunnerAgentSession,
   RunnerAgentSessionArgs,
@@ -11,11 +14,19 @@ export type FakeMarker =
   | { kind: "handoff"; nextStep: string }
   | { kind: "fail"; reason: string }
   | { kind: "hang" }
-  | { kind: "interactive" };
+  | { kind: "interactive" }
+  | { kind: "write"; relPath: string; content: string };
 
 export function parseFakeMarker(description: string): FakeMarker {
   const trimmed = description.trim().split("\n", 1)[0]?.trim() ?? "";
   if (trimmed.startsWith("fake:complete")) return { kind: "complete" };
+  if (trimmed.startsWith("fake:write ")) {
+    const rest = trimmed.slice("fake:write ".length).trim();
+    const sep = rest.indexOf(" ");
+    const relPath = sep === -1 ? rest : rest.slice(0, sep);
+    const content = sep === -1 ? "" : rest.slice(sep + 1);
+    return { kind: "write", relPath, content };
+  }
   if (trimmed.startsWith("fake:handoff ")) {
     return {
       kind: "handoff",
@@ -55,6 +66,14 @@ export class FixtureSession implements RunnerAgentSession {
 
     if (marker.kind === "complete") {
       this.#scheduleResolve({ kind: "finish", message: "fake complete" });
+    } else if (marker.kind === "write") {
+      // Perform a real file edit inside this step's worktree (`args.cwd`) so
+      // tests can exercise the no-clobber guarantee: concurrent isolated runs
+      // writing the same relative path land in their own worktrees.
+      const target = join(args.cwd, marker.relPath);
+      mkdirSync(dirname(target), { recursive: true });
+      writeFileSync(target, marker.content);
+      this.#scheduleResolve({ kind: "finish", message: "fake write" });
     } else if (marker.kind === "handoff") {
       this.#scheduleResolve({
         kind: "handoff",

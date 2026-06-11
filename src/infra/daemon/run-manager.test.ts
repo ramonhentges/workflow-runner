@@ -1,5 +1,5 @@
 import { expect, describe, it, beforeEach, afterEach } from "bun:test";
-import { mkdtemp, rm, readFile } from "node:fs/promises";
+import { mkdtemp, rm, readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { RunManager, RunManagerError } from "./run-manager.js";
@@ -16,9 +16,10 @@ import {
   FakeSessionFactory,
   ControllableSessionFactory,
 } from "./test-helpers/fake-session-factory.js";
-import type { RunnerAgentSessionFactory } from "../../domain/runner.js";
+import type { RunnerAgentSessionArgs, RunnerAgentSessionFactory } from "../../domain/runner.js";
 import type { McpServer } from "../mcp/mcp-server.js";
 import type { DaemonLogRecord } from "./daemon-log.js";
+import { FakeGitWorktrees } from "../git/git-worktrees.fake.js";
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -1247,6 +1248,286 @@ describe("RunManager", () => {
 
     expect(uniqueIds.size).toBe(100);
     expect(uniqueSlugs.size).toBe(100);
+
+    await manager.shutdown();
+  });
+
+  // ── startRun worktree isolation (fake GitWorktrees) ─────────────────────────
+
+  function captureCwdFactory(): {
+    factory: FakeSessionFactory;
+    capturedArgs: RunnerAgentSessionArgs[];
+  } {
+    const capturedArgs: RunnerAgentSessionArgs[] = [];
+    const factory = new FakeSessionFactory({
+      onCreate: (args) => capturedArgs.push(args),
+      resolveOutcome: () => ({ kind: "finish", message: "done" }),
+    });
+    return { factory, capturedArgs };
+  }
+
+  it("no branch: makes no git calls, runs in cwd, records no worktreePath/branch", async () => {
+    const wfPath = await writeWorkflow(tmpDir, "wf.json", SINGLE_STEP_WORKFLOW);
+    const { factory, capturedArgs } = captureCwdFactory();
+    const git = new FakeGitWorktrees({ repoRoots: { [tmpDir]: tmpDir } });
+    const manager = new RunManager(tmpDir, factory, { gitWorktrees: git });
+
+    const { runId } = await manager.startRun(wfPath, tmpDir);
+    const record = manager.get(runId);
+    if (!record) throw new Error("record not found");
+    await record.runPromise;
+
+    // No git interaction at all on the non-isolated path.
+    expect(git.addWorktreeCalls).toHaveLength(0);
+    expect(capturedArgs[0]!.cwd).toBe(tmpDir);
+    const snap = record.run.snapshot();
+    expect(snap.worktreePath).toBeUndefined();
+    expect(snap.branch).toBeUndefined();
+
+    await manager.shutdown();
+  });
+
+  it("branch with an existing worktree: reuses the path and does not call addWorktree", async () => {
+    const wfPath = await writeWorkflow(tmpDir, "wf.json", SINGLE_STEP_WORKFLOW);
+    const { factory, capturedArgs } = captureCwdFactory();
+    const existingWorktree = "/work/app-feature";
+    const git = new FakeGitWorktrees({
+      repoRoots: { [tmpDir]: "/work/app" },
+      worktreesByBranch: { feature: existingWorktree },
+    });
+    const manager = new RunManager(tmpDir, factory, { gitWorktrees: git });
+
+    const { runId } = await manager.startRun(wfPath, tmpDir, "feature");
+    const record = manager.get(runId);
+    if (!record) throw new Error("record not found");
+    await record.runPromise;
+
+    expect(git.addWorktreeCalls).toHaveLength(0);
+    expect(capturedArgs[0]!.cwd).toBe(existingWorktree);
+    const snap = record.run.snapshot();
+    expect(snap.worktreePath).toBe(existingWorktree);
+    expect(snap.branch).toBe("feature");
+
+    await manager.shutdown();
+  });
+
+  it("new branch (no worktree, branch absent): creates a sibling worktree with createBranch true", async () => {
+    const wfPath = await writeWorkflow(tmpDir, "wf.json", SINGLE_STEP_WORKFLOW);
+    const { factory, capturedArgs } = captureCwdFactory();
+    const git = new FakeGitWorktrees({ repoRoots: { [tmpDir]: "/work/app" } });
+    const manager = new RunManager(tmpDir, factory, { gitWorktrees: git });
+
+    const { runId } = await manager.startRun(wfPath, tmpDir, "feature");
+    const record = manager.get(runId);
+    if (!record) throw new Error("record not found");
+    await record.runPromise;
+
+    expect(git.addWorktreeCalls).toHaveLength(1);
+    const call = git.lastAddWorktreeCall!;
+    expect(call.repoRoot).toBe("/work/app");
+    expect(call.worktreePath).toBe(join("/work", "app-feature"));
+    expect(call.branch).toBe("feature");
+    expect(call.createBranch).toBe(true);
+    expect(capturedArgs[0]!.cwd).toBe(join("/work", "app-feature"));
+    expect(record.run.snapshot().worktreePath).toBe(join("/work", "app-feature"));
+
+    await manager.shutdown();
+  });
+
+  it("existing branch without a worktree: calls addWorktree with createBranch false", async () => {
+    const wfPath = await writeWorkflow(tmpDir, "wf.json", SINGLE_STEP_WORKFLOW);
+    const { factory } = captureCwdFactory();
+    const git = new FakeGitWorktrees({
+      repoRoots: { [tmpDir]: "/work/app" },
+      existingBranches: ["feature"],
+    });
+    const manager = new RunManager(tmpDir, factory, { gitWorktrees: git });
+
+    const { runId } = await manager.startRun(wfPath, tmpDir, "feature");
+    const record = manager.get(runId);
+    if (!record) throw new Error("record not found");
+    await record.runPromise;
+
+    expect(git.addWorktreeCalls).toHaveLength(1);
+    expect(git.lastAddWorktreeCall!.createBranch).toBe(false);
+
+    await manager.shutdown();
+  });
+
+  it("non-repo cwd: rejects with NOT_A_GIT_REPO and reserves no slot", async () => {
+    const wfPath = await writeWorkflow(tmpDir, "wf.json", SINGLE_STEP_WORKFLOW);
+    const { factory } = captureCwdFactory();
+    // FakeGitWorktrees returns null repoRoot for any unseeded dir.
+    const git = new FakeGitWorktrees();
+    const manager = new RunManager(tmpDir, factory, { gitWorktrees: git });
+
+    const err = await manager.startRun(wfPath, tmpDir, "feature").catch((e) => e);
+
+    expect(err).toBeInstanceOf(RunManagerError);
+    expect(err.code).toBe(RpcErrorCode.NOT_A_GIT_REPO);
+    expect(git.addWorktreeCalls).toHaveLength(0);
+    expect(manager.list()).toHaveLength(0);
+
+    await manager.shutdown();
+  });
+
+  it("findWorktreeForBranch failure: maps to GIT_ISOLATION_FAILED and reserves no slot", async () => {
+    const wfPath = await writeWorkflow(tmpDir, "wf.json", SINGLE_STEP_WORKFLOW);
+    const { factory } = captureCwdFactory();
+    // Repo root resolves, but the worktree-list read fails (locked/corrupt index).
+    const git = new FakeGitWorktrees({
+      repoRoots: { [tmpDir]: "/work/app" },
+      findWorktreeForBranchError: new Error("fatal: could not read worktree list"),
+    });
+    const manager = new RunManager(tmpDir, factory, { gitWorktrees: git });
+
+    const err = await manager.startRun(wfPath, tmpDir, "feature").catch((e) => e);
+
+    expect(err).toBeInstanceOf(RunManagerError);
+    expect(err.code).toBe(RpcErrorCode.GIT_ISOLATION_FAILED);
+    // The raw git message is preserved as actionable detail, not swallowed.
+    expect(err.message).toContain("could not read worktree list");
+    expect(git.addWorktreeCalls).toHaveLength(0);
+    expect(manager.list()).toHaveLength(0);
+
+    await manager.shutdown();
+  });
+
+  it("branchExists failure: maps to GIT_ISOLATION_FAILED and reserves no slot", async () => {
+    const wfPath = await writeWorkflow(tmpDir, "wf.json", SINGLE_STEP_WORKFLOW);
+    const { factory } = captureCwdFactory();
+    // No existing worktree, so branchExists is consulted next — and it fails.
+    const git = new FakeGitWorktrees({
+      repoRoots: { [tmpDir]: "/work/app" },
+      branchExistsError: new Error("fatal: unable to read branches"),
+    });
+    const manager = new RunManager(tmpDir, factory, { gitWorktrees: git });
+
+    const err = await manager.startRun(wfPath, tmpDir, "feature").catch((e) => e);
+
+    expect(err).toBeInstanceOf(RunManagerError);
+    expect(err.code).toBe(RpcErrorCode.GIT_ISOLATION_FAILED);
+    expect(err.message).toContain("unable to read branches");
+    expect(git.addWorktreeCalls).toHaveLength(0);
+    expect(manager.list()).toHaveLength(0);
+
+    await manager.shutdown();
+  });
+
+  it("addWorktree PATH_EXISTS: maps to WORKTREE_CONFLICT and cleans up the slot, MCP server, and run dir", async () => {
+    const wfPath = await writeWorkflow(tmpDir, "wf.json", SINGLE_STEP_WORKFLOW);
+    const { factory } = captureCwdFactory();
+    const git = new FakeGitWorktrees({
+      repoRoots: { [tmpDir]: "/work/app" },
+      addWorktreeError: "PATH_EXISTS",
+    });
+
+    const mcpServers: Array<{ instance: McpServer; closeCalled: boolean }> = [];
+    const mockCreateMcpServer = async (): Promise<McpServer> => {
+      const { McpServer: MS } = await import("../mcp/mcp-server.js");
+      const server = await MS.start();
+      let closeCalled = false;
+      const originalClose = server.close.bind(server);
+      (server as unknown as { close: () => Promise<void> }).close = async () => {
+        closeCalled = true;
+        return originalClose();
+      };
+      mcpServers.push({ instance: server, get closeCalled() { return closeCalled; } });
+      return server;
+    };
+
+    const manager = new RunManager(tmpDir, factory, {
+      gitWorktrees: git,
+      createMcpServer: mockCreateMcpServer,
+    });
+
+    const err = await manager.startRun(wfPath, tmpDir, "feature").catch((e) => e);
+
+    expect(err).toBeInstanceOf(RunManagerError);
+    expect(err.code).toBe(RpcErrorCode.WORKTREE_CONFLICT);
+    // The reserved slot is rolled back when provisioning fails.
+    expect(manager.list()).toHaveLength(0);
+
+    // The MCP server opened before the failing addWorktree must be closed so it
+    // does not leak its HTTP port across worktree conflicts.
+    expect(mcpServers).toHaveLength(1);
+    expect(mcpServers[0]!.closeCalled).toBe(true);
+
+    // The persisted run dir must be removed so discoverOnStartup does not
+    // resurrect it as a phantom orphan run.
+    const runsRoot = join(tmpDir, "runs");
+    const remaining = await readdir(runsRoot).catch(() => [] as string[]);
+    expect(remaining).toHaveLength(0);
+
+    await manager.shutdown();
+  });
+
+  it("addWorktree BRANCH_IN_USE: maps to a distinct BRANCH_IN_USE code and cleans up the slot, MCP server, and run dir", async () => {
+    const wfPath = await writeWorkflow(tmpDir, "wf.json", SINGLE_STEP_WORKFLOW);
+    const { factory } = captureCwdFactory();
+    const git = new FakeGitWorktrees({
+      repoRoots: { [tmpDir]: "/work/app" },
+      addWorktreeError: "BRANCH_IN_USE",
+    });
+
+    const mcpServers: Array<{ instance: McpServer; closeCalled: boolean }> = [];
+    const mockCreateMcpServer = async (): Promise<McpServer> => {
+      const { McpServer: MS } = await import("../mcp/mcp-server.js");
+      const server = await MS.start();
+      let closeCalled = false;
+      const originalClose = server.close.bind(server);
+      (server as unknown as { close: () => Promise<void> }).close = async () => {
+        closeCalled = true;
+        return originalClose();
+      };
+      mcpServers.push({ instance: server, get closeCalled() { return closeCalled; } });
+      return server;
+    };
+
+    const manager = new RunManager(tmpDir, factory, {
+      gitWorktrees: git,
+      createMcpServer: mockCreateMcpServer,
+    });
+
+    const err = await manager.startRun(wfPath, tmpDir, "feature").catch((e) => e);
+
+    expect(err).toBeInstanceOf(RunManagerError);
+    // A distinct code, not folded into WORKTREE_CONFLICT, so callers can tell
+    // "branch checked out elsewhere" apart from "path occupied".
+    expect(err.code).toBe(RpcErrorCode.BRANCH_IN_USE);
+    expect(err.code).not.toBe(RpcErrorCode.WORKTREE_CONFLICT);
+    // The reserved slot is rolled back when provisioning fails.
+    expect(manager.list()).toHaveLength(0);
+
+    // The MCP server opened before the failing addWorktree must be closed so it
+    // does not leak its HTTP port across branch conflicts.
+    expect(mcpServers).toHaveLength(1);
+    expect(mcpServers[0]!.closeCalled).toBe(true);
+
+    // The persisted run dir must be removed so discoverOnStartup does not
+    // resurrect it as a phantom orphan run.
+    const runsRoot = join(tmpDir, "runs");
+    const remaining = await readdir(runsRoot).catch(() => [] as string[]);
+    expect(remaining).toHaveLength(0);
+
+    await manager.shutdown();
+  });
+
+  it("branch name with a slash sanitizes into a single safe directory segment", async () => {
+    const wfPath = await writeWorkflow(tmpDir, "wf.json", SINGLE_STEP_WORKFLOW);
+    const { factory } = captureCwdFactory();
+    const git = new FakeGitWorktrees({ repoRoots: { [tmpDir]: "/work/app" } });
+    const manager = new RunManager(tmpDir, factory, { gitWorktrees: git });
+
+    const { runId } = await manager.startRun(wfPath, tmpDir, "feat/new ui");
+    const record = manager.get(runId);
+    if (!record) throw new Error("record not found");
+    await record.runPromise;
+
+    const call = git.lastAddWorktreeCall!;
+    expect(call.worktreePath).toBe(join("/work", "app-feat-new-ui"));
+    // The branch passed to git is the original, unsanitized name.
+    expect(call.branch).toBe("feat/new ui");
 
     await manager.shutdown();
   });

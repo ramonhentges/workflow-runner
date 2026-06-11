@@ -48,6 +48,23 @@ describe("RunStore", () => {
     expect(await store.load(snapshot.id)).toEqual(snapshot);
   });
 
+  it("round-trips worktreePath and branch through persist and load", async () => {
+    const root = await tempRoot();
+    const store = new RunStore({ storageRoot: root });
+    const snapshot = snapshotFor("run12345", {
+      cwd: "/repo",
+      worktreePath: "/repo-feature",
+      branch: "feature/x",
+    });
+
+    await store.persist(snapshot);
+
+    const loaded = await store.load(snapshot.id);
+    expect(loaded).toEqual(snapshot);
+    expect(loaded.worktreePath).toBe("/repo-feature");
+    expect(loaded.branch).toBe("feature/x");
+  });
+
   it("throws a typed error naming the missing meta path", async () => {
     const root = await tempRoot();
     const store = new RunStore({ storageRoot: root });

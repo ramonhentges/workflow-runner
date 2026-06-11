@@ -22,6 +22,8 @@ export interface RunListEntry {
   slug: RunSlug;
   workflowPath: string;
   cwd?: string;
+  worktreePath?: string;
+  branch?: string;
   currentStepId: StepId | null;
   status: RunStatus;
   startedAt: number;
@@ -31,7 +33,7 @@ export interface RunListEntry {
 
 export interface RpcMethods {
   "run.start": {
-    params: { workflowPath: string; cwd: string };
+    params: { workflowPath: string; cwd: string; branch?: string };
     result: { runId: RunId; slug: RunSlug };
   };
   "run.ps": {
@@ -80,6 +82,10 @@ export const RpcErrorCode = {
   CWD_INVALID: -32007,
   WORKFLOW_RUN_ACTIVE: -32008,
   WORKFLOW_EXISTS: -32009,
+  NOT_A_GIT_REPO: -32010,
+  WORKTREE_CONFLICT: -32011,
+  BRANCH_IN_USE: -32012,
+  GIT_ISOLATION_FAILED: -32013,
 } as const;
 
 export type RpcErrorName = keyof typeof RpcErrorCode;

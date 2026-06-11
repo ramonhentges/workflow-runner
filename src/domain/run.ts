@@ -18,6 +18,8 @@ export interface RunSnapshot {
   slug: RunSlug;
   workflowPath: string;
   cwd?: string;
+  worktreePath?: string;
+  branch?: string;
   status: RunStatus;
   currentStepId: StepId | null;
   visitedStepIds: StepId[];
@@ -40,6 +42,8 @@ export class Run {
   #slug: RunSlug;
   #workflowPath: string;
   #cwd: string | undefined;
+  #worktreePath: string | undefined;
+  #branch: string | undefined;
   #status: RunStatus;
   #currentStepId: StepId | null;
   #visitedStepIds: StepId[];
@@ -53,6 +57,8 @@ export class Run {
     this.#slug = snap.slug;
     this.#workflowPath = snap.workflowPath;
     this.#cwd = snap.cwd;
+    this.#worktreePath = snap.worktreePath;
+    this.#branch = snap.branch;
     this.#status = snap.status;
     this.#currentStepId = snap.currentStepId;
     this.#visitedStepIds = [...snap.visitedStepIds];
@@ -67,12 +73,16 @@ export class Run {
     slug: RunSlug;
     workflowPath: string;
     cwd?: string;
+    worktreePath?: string;
+    branch?: string;
   }): Run {
     return new Run({
       id: args.id,
       slug: args.slug,
       workflowPath: args.workflowPath,
       cwd: args.cwd,
+      worktreePath: args.worktreePath,
+      branch: args.branch,
       status: "running",
       currentStepId: null,
       visitedStepIds: [],
@@ -100,6 +110,12 @@ export class Run {
     };
     if (this.#cwd !== undefined) {
       snap.cwd = this.#cwd;
+    }
+    if (this.#worktreePath !== undefined) {
+      snap.worktreePath = this.#worktreePath;
+    }
+    if (this.#branch !== undefined) {
+      snap.branch = this.#branch;
     }
     if (this.#endReason !== undefined) {
       snap.endReason = this.#endReason;

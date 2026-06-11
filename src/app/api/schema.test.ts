@@ -73,6 +73,50 @@ describe("StartRunRequestSchema", () => {
     const result = StartRunRequestSchema.safeParse({ workflowPath: "/wf.json", cwd: "" });
     expect(result.success).toBe(false);
   });
+
+  it("accepts a body with a branch", () => {
+    const result = StartRunRequestSchema.safeParse({
+      workflowPath: "/wf.json",
+      cwd: "/home/user",
+      branch: "feature/iso",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.branch).toBe("feature/iso");
+  });
+
+  it("accepts a body without a branch (branch is optional)", () => {
+    const result = StartRunRequestSchema.safeParse({ workflowPath: "/wf.json", cwd: "/home/user" });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.branch).toBeUndefined();
+  });
+
+  it("rejects an empty-string branch", () => {
+    const result = StartRunRequestSchema.safeParse({
+      workflowPath: "/wf.json",
+      cwd: "/home/user",
+      branch: "",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a whitespace-only branch (trimmed to empty)", () => {
+    const result = StartRunRequestSchema.safeParse({
+      workflowPath: "/wf.json",
+      cwd: "/home/user",
+      branch: "   ",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("trims surrounding whitespace from a branch", () => {
+    const result = StartRunRequestSchema.safeParse({
+      workflowPath: "/wf.json",
+      cwd: "/home/user",
+      branch: "  feature/iso  ",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.branch).toBe("feature/iso");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -350,6 +394,46 @@ describe("RunSummarySchema", () => {
     };
     expect(RunSummarySchema.safeParse(summary).success).toBe(false);
   });
+
+  it("carries worktreePath/branch when present (isolated run)", () => {
+    const summary = {
+      id: "run-abc",
+      slug: "abc",
+      workflowPath: "/wf.json",
+      worktreePath: "/projects/app-feature-iso",
+      branch: "feature/iso",
+      currentStepId: "step-1",
+      status: "running",
+      startedAt: 1748548800000,
+      endedAt: null,
+      attachedCount: 0,
+    };
+    const result = RunSummarySchema.safeParse(summary);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.worktreePath).toBe("/projects/app-feature-iso");
+      expect(result.data.branch).toBe("feature/iso");
+    }
+  });
+
+  it("omits worktreePath/branch for a non-isolated run", () => {
+    const summary = {
+      id: "run-abc",
+      slug: "abc",
+      workflowPath: "/wf.json",
+      currentStepId: "step-1",
+      status: "running",
+      startedAt: 1748548800000,
+      endedAt: null,
+      attachedCount: 0,
+    };
+    const result = RunSummarySchema.safeParse(summary);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.worktreePath).toBeUndefined();
+      expect(result.data.branch).toBeUndefined();
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -364,6 +448,29 @@ describe("RunDetailSchema", () => {
   it("rejects missing visitedStepIds", () => {
     const { visitedStepIds: _, ...rest } = sampleRunDetail;
     expect(RunDetailSchema.safeParse(rest).success).toBe(false);
+  });
+
+  it("carries worktreePath/branch when present (isolated run)", () => {
+    const detail = {
+      ...sampleRunDetail,
+      worktreePath: "/projects/app-feature-iso",
+      branch: "feature/iso",
+    };
+    const result = RunDetailSchema.safeParse(detail);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.worktreePath).toBe("/projects/app-feature-iso");
+      expect(result.data.branch).toBe("feature/iso");
+    }
+  });
+
+  it("omits worktreePath/branch for a non-isolated run", () => {
+    const result = RunDetailSchema.safeParse(sampleRunDetail);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.worktreePath).toBeUndefined();
+      expect(result.data.branch).toBeUndefined();
+    }
   });
 });
 

@@ -39,9 +39,9 @@ export function WorkflowList() {
   const activeCwd = useCwdStore(state => state.activeCwd())
   const queryClient = useQueryClient()
   const navigate = useNavigate()
-  const [confirmingName, setConfirmingName] = useState<string | null>(null)
+  const [confirmingKey, setConfirmingKey] = useState<string | null>(null)
   const [deleteError, setDeleteError] = useState('')
-  const [startingName, setStartingName] = useState<string | null>(null)
+  const [startingKey, setStartingKey] = useState<string | null>(null)
   const [startError, setStartError] = useState('')
   const { data, isLoading, isError } = useWorkflowList()
   const workflows = data?.workflows ?? []
@@ -64,7 +64,7 @@ export function WorkflowList() {
       await navigate({ to: '/runs/$runId', params: { runId: data.runId } })
     },
     onError: error => {
-      setStartingName(null)
+      setStartingKey(null)
       setStartError(error instanceof Error ? error.message : 'Failed to start run.')
     },
   })
@@ -170,13 +170,18 @@ export function WorkflowList() {
             <TableBody>
               {workflows.map(workflow => {
                 const bareName = workflowBareName(workflow)
-                const isConfirming = confirmingName === bareName
+                // Key interaction state by scope+name (matching the row key), not
+                // the bare name alone: a global and a project workflow may share a
+                // bare name, and a bare-name key would light up the confirm /
+                // "Starting…" / "Deleting…" state on both rows at once.
+                const rowKey = `${workflow.scope}-${bareName}`
+                const isConfirming = confirmingKey === rowKey
                 const isDeleting = deleteMutation.isPending && isConfirming
-                const isStarting = startMutation.isPending && startingName === bareName
+                const isStarting = startMutation.isPending && startingKey === rowKey
 
                 return (
                   <TableRow
-                    key={`${workflow.scope}-${bareName}`}
+                    key={rowKey}
                     data-testid={`workflow-row-${bareName}`}
                   >
                     <TableCell className="font-medium">{workflowDisplayName(workflow)}</TableCell>
@@ -199,7 +204,7 @@ export function WorkflowList() {
                           size="sm"
                           disabled={isStarting}
                           onClick={() => {
-                            setStartingName(bareName)
+                            setStartingKey(rowKey)
                             startMutation.mutate(workflow)
                           }}
                         >
@@ -231,7 +236,7 @@ export function WorkflowList() {
                             variant="destructive"
                             size="sm"
                             onClick={() => {
-                              setConfirmingName(bareName)
+                              setConfirmingKey(rowKey)
                               setDeleteError('')
                             }}
                           >
@@ -250,7 +255,7 @@ export function WorkflowList() {
                                 deleteMutation.mutate(
                                   { scope: workflow.scope, name: bareName },
                                   {
-                                    onSuccess: () => setConfirmingName(null),
+                                    onSuccess: () => setConfirmingKey(null),
                                     onError: error => setDeleteError(runActiveDeleteMessage(error)),
                                   },
                                 )
@@ -264,7 +269,7 @@ export function WorkflowList() {
                               variant="ghost"
                               size="sm"
                               disabled={isDeleting}
-                              onClick={() => setConfirmingName(null)}
+                              onClick={() => setConfirmingKey(null)}
                             >
                               <X className="size-4" aria-hidden="true" />
                               Cancel

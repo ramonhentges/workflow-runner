@@ -31,8 +31,13 @@ interface WorkflowEditorProps {
   initialValues?: WorkflowDraft
   // Edit mode: the existing workflow's scope, derived from its file location and
   // shown read-only — edits preserve scope (ADR-003). Ignored in create mode,
-  // where the toggle owns the chosen scope (default Project).
+  // where the toggle owns the chosen scope.
   scope?: WorkflowScope
+  // Create mode: seeds the scope toggle's initial value. When duplicating a
+  // workflow this carries the source row's scope so a copy of a global workflow
+  // defaults to Global (scope parity); absent it falls back to Project. Ignored
+  // in edit mode, where `scope` is shown read-only.
+  initialScope?: WorkflowScope
 }
 
 function scopeLabel(scope: WorkflowScope): string {
@@ -44,14 +49,17 @@ export function WorkflowEditor({
   existingName,
   initialValues,
   scope: existingScope,
+  initialScope,
 }: WorkflowEditorProps) {
   const activeCwd = useCwdStore(state => state.activeCwd())
   const navigate = useNavigate()
   const [serverError, setServerError] = useState('')
 
-  // Create chooses scope via the toggle (default Project); edit reuses the
-  // existing scope unchanged. `effectiveScope` is what the mutation targets.
-  const [createScope, setCreateScope] = useState<WorkflowScope>('project')
+  // Create chooses scope via the toggle, seeded from `initialScope` (a duplicate
+  // carries the source row's scope; plain creates fall back to Project); edit
+  // reuses the existing scope unchanged. `effectiveScope` is what the mutation
+  // targets.
+  const [createScope, setCreateScope] = useState<WorkflowScope>(initialScope ?? 'project')
   const effectiveScope: WorkflowScope =
     mode === 'edit' ? existingScope ?? 'project' : createScope
 

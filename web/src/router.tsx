@@ -1,4 +1,4 @@
-import { createRootRoute, createRoute, createRouter } from '@tanstack/react-router'
+import { createRootRoute, createRoute, createRouter, Link } from '@tanstack/react-router'
 import { AppShell } from './app/AppShell'
 import { RunsTable } from './features/dashboard/RunsTable'
 import { StartRunForm } from './features/start-run/StartRunForm'
@@ -89,7 +89,7 @@ function RunPage() {
 function NewWorkflowPage() {
   const { from, scope } = newWorkflowRoute.useSearch()
   const activeCwd = useCwdStore(state => state.activeCwd())
-  const { data: sourceDoc, isLoading } = useWorkflow(from, scope)
+  const { data: sourceDoc, isLoading, isError } = useWorkflow(from, scope)
 
   if (from && activeCwd && isLoading) {
     return (
@@ -99,10 +99,30 @@ function NewWorkflowPage() {
     )
   }
 
+  // A duplicate seeds the form from `from`; if that source read fails (transient
+  // error, or it was deleted/renamed between list render and the click) surface
+  // it like EditWorkflowPage does, instead of silently opening a blank create
+  // form that discards the user's intent to copy.
+  if (from && activeCwd && (isError || !sourceDoc)) {
+    return (
+      <div data-testid="workflow-duplicate-error" className="text-center py-8 text-destructive">
+        <p>Couldn't load the workflow to duplicate.</p>
+        <Link to="/workflows" className="mt-2 inline-block underline">
+          Back to workflows
+        </Link>
+      </div>
+    )
+  }
+
   const initialValues =
     from && sourceDoc ? workflowDocToFormData(sourceDoc, '') : undefined
 
-  return <WorkflowEditor mode="create" initialValues={initialValues} />
+  // Seed the create toggle from the source scope so duplicating a global
+  // workflow defaults the copy to Global (scope parity). Plain "New workflow"
+  // links pass scope: 'project', so they keep the Project default.
+  return (
+    <WorkflowEditor mode="create" initialValues={initialValues} initialScope={scope} />
+  )
 }
 
 function EditWorkflowPage() {

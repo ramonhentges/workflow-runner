@@ -63,10 +63,19 @@ export function useUpdateWorkflow() {
       if (!activeCwd) throw new Error('No active working directory selected.')
       return updateWorkflow(activeCwd.path, vars.scope, vars.name, vars.body)
     },
-    onSuccess: () =>
-      queryClient.invalidateQueries({
-        queryKey: workflowListQueryKey(activeCwd?.path ?? null),
-      }),
+    onSuccess: (doc, vars) => {
+      const cwd = activeCwd?.path ?? null
+      // Seed the per-workflow cache with the freshly saved doc so the next mount of
+      // the editor reads post-edit content immediately. Plain invalidation is not
+      // enough: the stale entry is returned synchronously before the refetch lands
+      // and RHF seeds from defaultValues only once, keeping the pre-edit values.
+      queryClient.setQueryData(workflowQueryKey(cwd, vars.scope, doc.name), doc)
+      // On rename the old name's entry is now obsolete; drop it so it can't be read.
+      if (doc.name !== vars.name) {
+        queryClient.removeQueries({ queryKey: workflowQueryKey(cwd, vars.scope, vars.name) })
+      }
+      queryClient.invalidateQueries({ queryKey: workflowListQueryKey(cwd) })
+    },
   })
 }
 

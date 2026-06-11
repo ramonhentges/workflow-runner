@@ -103,6 +103,7 @@ export interface WorkflowList {
 export interface WorkflowDoc {
   name: string
   path: string
+  scope: WorkflowScope
   workflow: unknown
 }
 
@@ -118,6 +119,7 @@ export interface WorkflowUpdateBody {
 
 export interface WorkflowDeleteResult {
   deleted: string
+  scope: WorkflowScope
 }
 
 export interface IdeCatalogEntry {

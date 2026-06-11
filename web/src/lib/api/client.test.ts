@@ -58,6 +58,7 @@ function makeWorkflowDoc(overrides: Partial<WorkflowDoc> = {}): WorkflowDoc {
   return {
     name,
     path: `/tmp/test/workflows/${name}.json`,
+    scope: 'project',
     workflow: {
       id: name,
       name: 'Who Is',
@@ -374,13 +375,13 @@ describe('workflow CRUD client functions', () => {
       http.delete(`${BASE}/workflows/who-is`, ({ request }) => {
         capturedUrl = request.url
         capturedMethod = request.method
-        return HttpResponse.json({ deleted: 'who-is' })
+        return HttpResponse.json({ deleted: 'who-is', scope: 'project' })
       }),
     )
 
     const result = await deleteWorkflow('/tmp/test', 'project', 'who-is')
 
-    expect(result).toEqual({ deleted: 'who-is' })
+    expect(result).toEqual({ deleted: 'who-is', scope: 'project' })
     const parsed = new URL(capturedUrl)
     expect(capturedMethod).toBe('DELETE')
     expect(parsed.pathname).toBe('/workflows/who-is')
@@ -448,6 +449,7 @@ describe('workflow CRUD client functions (MSW integration)', () => {
         const doc: WorkflowDoc = {
           name: body.name,
           path: `${cwd}/workflows/${body.name}.json`,
+          scope: 'project',
           workflow: body.workflow,
         }
         stored.set(body.name, doc)

@@ -231,6 +231,7 @@ describe('WorkflowEditor — validation blocking', () => {
     const doc: WorkflowDoc = {
       name: 'dangling-flow',
       path: '/p/workflows/dangling-flow.json',
+      scope: 'project',
       workflow: {
         id: 'd',
         name: 'Dangling',
@@ -278,6 +279,7 @@ describe('WorkflowEditor — duplicate prefill mode', () => {
   const sourceDoc: WorkflowDoc = {
     name: 'source-flow',
     path: '/p/workflows/source-flow.json',
+    scope: 'project',
     workflow: {
       id: 'source-id',
       name: 'Source Flow',
@@ -367,6 +369,7 @@ describe('WorkflowEditor — save success', () => {
     const existingDoc: WorkflowDoc = {
       name: 'existing-flow',
       path: '/p/workflows/existing-flow.json',
+      scope: 'project',
       workflow: {
         id: 'ex',
         name: 'Existing',
@@ -426,6 +429,7 @@ describe('WorkflowEditor — save success', () => {
     const existingDoc: WorkflowDoc = {
       name: 'old-name',
       path: '/p/workflows/old-name.json',
+      scope: 'project',
       workflow: {
         id: 'ex',
         name: 'Existing',
@@ -489,6 +493,7 @@ describe('WorkflowEditor — out-of-catalog ide', () => {
   const customIdeDoc: WorkflowDoc = {
     name: 'custom-ide-flow',
     path: '/p/workflows/custom-ide-flow.json',
+    scope: 'project',
     workflow: {
       id: 'custom-ide',
       name: 'Custom IDE Flow',
@@ -801,6 +806,7 @@ describe('WorkflowEditor — MSW integration', () => {
     const doc: WorkflowDoc = {
       name: 'edit-me',
       path: '/p/workflows/edit-me.json',
+      scope: 'project',
       workflow: {
         id: 'edit-me',
         name: 'Edit Me',
@@ -863,6 +869,7 @@ describe('WorkflowEditor — scope toggle and badge', () => {
   const globalDoc: WorkflowDoc = {
     name: 'shared-flow',
     path: '/state/workflow-runner/workflows/shared-flow.json',
+    scope: 'global',
     workflow: {
       id: 'shared',
       name: 'Shared',

@@ -146,6 +146,15 @@ describe("findActiveRunForWorkflow (unit)", () => {
     );
   });
 
+  it("matches a global workflow run stored with an absolute path and no cwd", () => {
+    // Global runs (ADR-002) carry the absolute global file path; `cwd` is the
+    // active project, but the snapshot may store the absolute path directly with
+    // no cwd. `resolve("", abs)` returns the absolute path, so it still matches.
+    const globalPath = "/state/workflow-runner/workflows/deploy.json";
+    const snaps = [makeSnap({ id: "run55555", workflowPath: globalPath })];
+    expect(findActiveRunForWorkflow(snaps, globalPath)).toBe(asRunId("run55555"));
+  });
+
   it("does not match a relative path resolved under a different cwd", () => {
     const snaps = [
       makeSnap({

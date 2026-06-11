@@ -8,6 +8,7 @@ import type {
   WorkflowCreateBody,
   WorkflowUpdateBody,
   WorkflowDeleteResult,
+  WorkflowScope,
   IdeCatalog,
   HealthReport,
   StartRunRequest,
@@ -83,30 +84,43 @@ export async function listWorkflows(cwd: string): Promise<WorkflowList> {
   return apiFetch<WorkflowList>('/workflows', { params: { cwd } })
 }
 
-export async function getWorkflow(cwd: string, name: string): Promise<WorkflowDoc> {
-  return apiFetch<WorkflowDoc>(`/workflows/${encodeURIComponent(name)}`, { params: { cwd } })
+export async function getWorkflow(
+  cwd: string,
+  scope: WorkflowScope,
+  name: string,
+): Promise<WorkflowDoc> {
+  return apiFetch<WorkflowDoc>(`/workflows/${encodeURIComponent(name)}`, { params: { cwd, scope } })
 }
 
-export async function createWorkflow(cwd: string, body: WorkflowCreateBody): Promise<WorkflowDoc> {
-  return apiFetch<WorkflowDoc>('/workflows', { method: 'POST', params: { cwd }, body })
+export async function createWorkflow(
+  cwd: string,
+  scope: WorkflowScope,
+  body: WorkflowCreateBody,
+): Promise<WorkflowDoc> {
+  return apiFetch<WorkflowDoc>('/workflows', { method: 'POST', params: { cwd, scope }, body })
 }
 
 export async function updateWorkflow(
   cwd: string,
+  scope: WorkflowScope,
   name: string,
   body: WorkflowUpdateBody,
 ): Promise<WorkflowDoc> {
   return apiFetch<WorkflowDoc>(`/workflows/${encodeURIComponent(name)}`, {
     method: 'PUT',
-    params: { cwd },
+    params: { cwd, scope },
     body,
   })
 }
 
-export async function deleteWorkflow(cwd: string, name: string): Promise<WorkflowDeleteResult> {
+export async function deleteWorkflow(
+  cwd: string,
+  scope: WorkflowScope,
+  name: string,
+): Promise<WorkflowDeleteResult> {
   return apiFetch<WorkflowDeleteResult>(`/workflows/${encodeURIComponent(name)}`, {
     method: 'DELETE',
-    params: { cwd },
+    params: { cwd, scope },
   })
 }
 

@@ -1,4 +1,4 @@
-import { createRootRoute, createRoute, createRouter } from '@tanstack/react-router'
+import { createRootRoute, createRoute, createRouter, Link } from '@tanstack/react-router'
 import { AppShell } from './app/AppShell'
 import { RunsTable } from './features/dashboard/RunsTable'
 import { StartRunForm } from './features/start-run/StartRunForm'
@@ -10,7 +10,7 @@ import {
   workflowDocToFormData,
 } from './features/workflows/WorkflowDraftSchema'
 import { useCwdStore } from './stores/cwd-store'
-import { parseStatus, type RunStatus } from './lib/api/types'
+import { parseStatus, type RunStatus, type WorkflowScope } from './lib/api/types'
 
 function NotFound() {
   return (
@@ -51,8 +51,14 @@ const workflowsRoute = createRoute({
 const newWorkflowRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/workflows/new',
-  validateSearch: (search: Record<string, unknown>) => ({
+  // `from` seeds a duplicate; `scope` says which scope to copy that source from
+  // so duplicating a global workflow reads the global document (mirrors the edit
+  // route below). Absent/unknown scope coerces to "project" for plain creates.
+  validateSearch: (
+    search: Record<string, unknown>,
+  ): { from?: string; scope: WorkflowScope } => ({
     from: typeof search.from === 'string' ? search.from : undefined,
+    scope: search.scope === 'global' ? 'global' : 'project',
   }),
   component: NewWorkflowPage,
 })
@@ -60,6 +66,12 @@ const newWorkflowRoute = createRoute({
 const editWorkflowRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/workflows/$name/edit',
+  // The list row carries its scope into the edit action (task_06); an unknown
+  // or absent value coerces to "project" for back-compat. task_07 threads this
+  // into useWorkflow(name, scope) and the read-only scope badge.
+  validateSearch: (search: Record<string, unknown>): { scope: WorkflowScope } => ({
+    scope: search.scope === 'global' ? 'global' : 'project',
+  }),
   component: EditWorkflowPage,
 })
 
@@ -75,9 +87,9 @@ function RunPage() {
 }
 
 function NewWorkflowPage() {
-  const { from } = newWorkflowRoute.useSearch()
+  const { from, scope } = newWorkflowRoute.useSearch()
   const activeCwd = useCwdStore(state => state.activeCwd())
-  const { data: sourceDoc, isLoading } = useWorkflow(from)
+  const { data: sourceDoc, isLoading, isError } = useWorkflow(from, scope)
 
   if (from && activeCwd && isLoading) {
     return (
@@ -87,16 +99,37 @@ function NewWorkflowPage() {
     )
   }
 
+  // A duplicate seeds the form from `from`; if that source read fails (transient
+  // error, or it was deleted/renamed between list render and the click) surface
+  // it like EditWorkflowPage does, instead of silently opening a blank create
+  // form that discards the user's intent to copy.
+  if (from && activeCwd && (isError || !sourceDoc)) {
+    return (
+      <div data-testid="workflow-duplicate-error" className="text-center py-8 text-destructive">
+        <p>Couldn't load the workflow to duplicate.</p>
+        <Link to="/workflows" className="mt-2 inline-block underline">
+          Back to workflows
+        </Link>
+      </div>
+    )
+  }
+
   const initialValues =
     from && sourceDoc ? workflowDocToFormData(sourceDoc, '') : undefined
 
-  return <WorkflowEditor mode="create" initialValues={initialValues} />
+  // Seed the create toggle from the source scope so duplicating a global
+  // workflow defaults the copy to Global (scope parity). Plain "New workflow"
+  // links pass scope: 'project', so they keep the Project default.
+  return (
+    <WorkflowEditor mode="create" initialValues={initialValues} initialScope={scope} />
+  )
 }
 
 function EditWorkflowPage() {
   const { name } = editWorkflowRoute.useParams()
+  const { scope } = editWorkflowRoute.useSearch()
   const activeCwd = useCwdStore(state => state.activeCwd())
-  const { data: workflowDoc, isLoading, isError } = useWorkflow(name)
+  const { data: workflowDoc, isLoading, isError } = useWorkflow(name, scope)
 
   if (activeCwd && isLoading) {
     return (
@@ -118,6 +151,7 @@ function EditWorkflowPage() {
     <WorkflowEditor
       mode="edit"
       existingName={name}
+      scope={scope}
       initialValues={workflowDoc ? workflowDocToFormData(workflowDoc) : undefined}
     />
   )

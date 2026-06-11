@@ -15,6 +15,7 @@ import type { ReactNode } from 'react'
 import { server } from '../../../test/setup'
 import { useCwdStore } from '@/stores/cwd-store'
 import { WorkflowEditor } from './WorkflowEditor'
+import { WorkflowList } from './WorkflowList'
 import { workflowDocToFormData } from './WorkflowDraftSchema'
 import { useWorkflow } from './useWorkflow'
 import type { WorkflowDoc } from '@/lib/api/types'
@@ -230,6 +231,7 @@ describe('WorkflowEditor — validation blocking', () => {
     const doc: WorkflowDoc = {
       name: 'dangling-flow',
       path: '/p/workflows/dangling-flow.json',
+      scope: 'project',
       workflow: {
         id: 'd',
         name: 'Dangling',
@@ -277,6 +279,7 @@ describe('WorkflowEditor — duplicate prefill mode', () => {
   const sourceDoc: WorkflowDoc = {
     name: 'source-flow',
     path: '/p/workflows/source-flow.json',
+    scope: 'project',
     workflow: {
       id: 'source-id',
       name: 'Source Flow',
@@ -366,6 +369,7 @@ describe('WorkflowEditor — save success', () => {
     const existingDoc: WorkflowDoc = {
       name: 'existing-flow',
       path: '/p/workflows/existing-flow.json',
+      scope: 'project',
       workflow: {
         id: 'ex',
         name: 'Existing',
@@ -425,6 +429,7 @@ describe('WorkflowEditor — save success', () => {
     const existingDoc: WorkflowDoc = {
       name: 'old-name',
       path: '/p/workflows/old-name.json',
+      scope: 'project',
       workflow: {
         id: 'ex',
         name: 'Existing',
@@ -488,6 +493,7 @@ describe('WorkflowEditor — out-of-catalog ide', () => {
   const customIdeDoc: WorkflowDoc = {
     name: 'custom-ide-flow',
     path: '/p/workflows/custom-ide-flow.json',
+    scope: 'project',
     workflow: {
       id: 'custom-ide',
       name: 'Custom IDE Flow',
@@ -800,6 +806,7 @@ describe('WorkflowEditor — MSW integration', () => {
     const doc: WorkflowDoc = {
       name: 'edit-me',
       path: '/p/workflows/edit-me.json',
+      scope: 'project',
       workflow: {
         id: 'edit-me',
         name: 'Edit Me',
@@ -849,6 +856,250 @@ describe('WorkflowEditor — MSW integration', () => {
       expect(router.state.location.pathname).toBe('/workflows')
     })
     expect(putCwd).toBe('/p')
+  })
+})
+
+// ── Scope toggle (create) and read-only badge (edit) ─────────────────────────
+
+describe('WorkflowEditor — scope toggle and badge', () => {
+  beforeEach(() => {
+    useCwdStore.getState().addCwd('proj', '/p')
+  })
+
+  const globalDoc: WorkflowDoc = {
+    name: 'shared-flow',
+    path: '/state/workflow-runner/workflows/shared-flow.json',
+    scope: 'global',
+    workflow: {
+      id: 'shared',
+      name: 'Shared',
+      description: '',
+      version: '1.0',
+      steps: [
+        {
+          id: 'step-1',
+          agent: 'agent',
+          model: 'model',
+          ide: 'claude-code',
+          mode: 'interactive',
+          description: '',
+          edges: [],
+        },
+      ],
+    },
+  }
+
+  test('the create form scope selector defaults to Project', async () => {
+    renderEditor({ mode: 'create' })
+    await screen.findByTestId('scope-toggle')
+
+    expect(screen.getByTestId('scope-toggle-project')).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByTestId('scope-toggle-global')).toHaveAttribute('aria-pressed', 'false')
+    // create mode shows the toggle, not a read-only badge
+    expect(screen.queryByTestId('scope-badge')).not.toBeInTheDocument()
+  })
+
+  test('selecting Global and saving creates the workflow with scope=global', async () => {
+    const user = userEvent.setup()
+    let postScope: string | null = null
+
+    server.use(
+      http.post(`${BASE}/workflows`, ({ request }) => {
+        postScope = new URL(request.url).searchParams.get('scope')
+        return HttpResponse.json(
+          { name: 'g-flow', path: '/state/workflow-runner/workflows/g-flow.json', workflow: {} },
+          { status: 201 },
+        )
+      }),
+      http.get(`${BASE}/workflows`, () => HttpResponse.json({ workflows: [] })),
+    )
+
+    const { router } = renderEditor({ mode: 'create' })
+    await screen.findByTestId('workflow-filename-input')
+
+    await user.type(screen.getByTestId('workflow-filename-input'), 'g-flow')
+    await user.click(screen.getByTestId('scope-toggle-global'))
+    expect(screen.getByTestId('scope-toggle-global')).toHaveAttribute('aria-pressed', 'true')
+
+    await user.click(screen.getByTestId('add-step-button'))
+    await user.type(screen.getByTestId('step-id-input-0'), 'step-1')
+    await user.type(screen.getByTestId('step-agent-input-0'), 'agent')
+    await user.type(screen.getByTestId('step-model-input-0'), 'model')
+
+    await user.click(screen.getByTestId('save-button'))
+
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe('/workflows')
+    })
+    expect(postScope).toBe('global')
+  })
+
+  test('a default (untouched) create saves with scope=project', async () => {
+    const user = userEvent.setup()
+    let postScope: string | null = null
+
+    server.use(
+      http.post(`${BASE}/workflows`, ({ request }) => {
+        postScope = new URL(request.url).searchParams.get('scope')
+        return HttpResponse.json(
+          { name: 'p-flow', path: '/p/workflows/p-flow.json', workflow: {} },
+          { status: 201 },
+        )
+      }),
+      http.get(`${BASE}/workflows`, () => HttpResponse.json({ workflows: [] })),
+    )
+
+    const { router } = renderEditor({ mode: 'create' })
+    await screen.findByTestId('workflow-filename-input')
+
+    await user.type(screen.getByTestId('workflow-filename-input'), 'p-flow')
+    await user.click(screen.getByTestId('add-step-button'))
+    await user.type(screen.getByTestId('step-id-input-0'), 'step-1')
+    await user.type(screen.getByTestId('step-agent-input-0'), 'agent')
+    await user.type(screen.getByTestId('step-model-input-0'), 'model')
+
+    await user.click(screen.getByTestId('save-button'))
+
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe('/workflows')
+    })
+    expect(postScope).toBe('project')
+  })
+
+  test('editing a global workflow shows a read-only Global badge and no scope selector', async () => {
+    renderEditor({
+      mode: 'edit',
+      existingName: 'shared-flow',
+      scope: 'global',
+      initialValues: workflowDocToFormData(globalDoc),
+    })
+
+    await screen.findByTestId('workflow-editor-form')
+
+    const badge = screen.getByTestId('scope-badge')
+    expect(badge).toHaveTextContent('Global')
+    expect(badge).toHaveAttribute('data-scope', 'global')
+    expect(screen.queryByTestId('scope-toggle')).not.toBeInTheDocument()
+  })
+
+  test('saving an edit preserves the original scope (sends scope=global, no change)', async () => {
+    const user = userEvent.setup()
+    let putScope: string | null = null
+
+    server.use(
+      http.put(`${BASE}/workflows/:name`, ({ request }) => {
+        putScope = new URL(request.url).searchParams.get('scope')
+        return HttpResponse.json({
+          name: 'shared-flow',
+          path: '/state/workflow-runner/workflows/shared-flow.json',
+          workflow: {},
+        })
+      }),
+      http.get(`${BASE}/workflows`, () => HttpResponse.json({ workflows: [] })),
+    )
+
+    const { router } = renderEditor({
+      mode: 'edit',
+      existingName: 'shared-flow',
+      scope: 'global',
+      initialValues: workflowDocToFormData(globalDoc),
+    })
+
+    await screen.findByTestId('workflow-editor-form')
+
+    const agentInput = screen.getByTestId('step-agent-input-0')
+    await user.clear(agentInput)
+    await user.type(agentInput, 'updated-agent')
+
+    await user.click(screen.getByTestId('save-button'))
+
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe('/workflows')
+    })
+    expect(putScope).toBe('global')
+  })
+})
+
+// ── Integration: create-as-global, then list shows the Global badge ──────────
+
+describe('WorkflowEditor — create-as-global integration', () => {
+  beforeEach(() => {
+    useCwdStore.getState().addCwd('proj', '/p')
+  })
+
+  function renderEditorThenList(queryClient = makeQueryClient()) {
+    const rootRoute = createRootRoute({ component: () => <Outlet /> })
+    const editorRoute = createRoute({
+      getParentRoute: () => rootRoute,
+      path: '/',
+      component: () => <WorkflowEditor mode="create" />,
+    })
+    const listRoute = createRoute({
+      getParentRoute: () => rootRoute,
+      path: '/workflows',
+      component: () => <WorkflowList />,
+    })
+    const routeTree = rootRoute.addChildren([editorRoute, listRoute])
+    const history = createMemoryHistory({ initialEntries: ['/'] })
+    const router = createRouter({ routeTree, history })
+
+    return {
+      ...render(
+        <QueryClientProvider client={queryClient}>
+          <RouterProvider router={router} />
+        </QueryClientProvider>,
+      ),
+      router,
+    }
+  }
+
+  test('create-as-global navigates to the list which renders the workflow badged Global', async () => {
+    const user = userEvent.setup()
+
+    server.use(
+      http.post(`${BASE}/workflows`, () =>
+        HttpResponse.json(
+          {
+            name: 'shared-flow',
+            path: '/state/workflow-runner/workflows/shared-flow.json',
+            workflow: {},
+          },
+          { status: 201 },
+        ),
+      ),
+      // After the create + invalidation, the combined list returns the new global item.
+      http.get(`${BASE}/workflows`, () =>
+        HttpResponse.json({
+          workflows: [
+            {
+              name: 'shared-flow.json',
+              path: '/state/workflow-runner/workflows/shared-flow.json',
+              scope: 'global',
+            },
+          ],
+        }),
+      ),
+    )
+
+    const { router } = renderEditorThenList()
+    await screen.findByTestId('workflow-filename-input')
+
+    await user.click(screen.getByTestId('scope-toggle-global'))
+    await user.type(screen.getByTestId('workflow-filename-input'), 'shared-flow')
+    await user.click(screen.getByTestId('add-step-button'))
+    await user.type(screen.getByTestId('step-id-input-0'), 'step-1')
+    await user.type(screen.getByTestId('step-agent-input-0'), 'agent')
+    await user.type(screen.getByTestId('step-model-input-0'), 'model')
+
+    await user.click(screen.getByTestId('save-button'))
+
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe('/workflows')
+    })
+
+    const badge = await screen.findByTestId('workflow-scope-badge')
+    expect(badge).toHaveTextContent('Global')
+    expect(badge).toHaveAttribute('data-scope', 'global')
   })
 })
 

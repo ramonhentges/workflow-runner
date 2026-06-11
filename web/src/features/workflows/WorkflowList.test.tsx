@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach } from 'vitest'
+import { describe, test, expect, beforeEach, vi } from 'vitest'
 import { render, screen, waitFor, renderHook, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -47,7 +47,13 @@ function renderWorkflowList(initialPath = '/workflows', queryClient = makeQueryC
   const editWorkflowRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: '/workflows/$name/edit',
-    component: () => <div data-testid="edit-workflow-page" />,
+    validateSearch: (search: Record<string, unknown>) => ({
+      scope: search.scope === 'global' ? 'global' : 'project',
+    }),
+    component: function EditWorkflowPage() {
+      const { scope } = editWorkflowRoute.useSearch()
+      return <div data-testid="edit-workflow-page" data-scope={scope} />
+    },
   })
   const runRoute = createRoute({
     getParentRoute: () => rootRoute,
@@ -228,7 +234,7 @@ describe('WorkflowList rendering', () => {
     const empty = await screen.findByTestId('no-workflows-state')
     expect(screen.queryByRole('table')).not.toBeInTheDocument()
     const action = within(empty).getByTestId('create-first-workflow-action')
-    expect(action).toHaveAttribute('href', '/workflows/new')
+    expect(action).toHaveAttribute('href', '/workflows/new?scope=project')
   })
 })
 
@@ -374,10 +380,10 @@ describe('WorkflowList navigation', () => {
     expect(router.state.location.pathname).toBe('/workflows/new')
   })
 
-  test('duplicate action navigates to the new workflow route with the source name', async () => {
+  test('duplicate action navigates to the new workflow route with the source name and scope', async () => {
     const user = userEvent.setup()
     useCwdStore.getState().addCwd('proj', '/p')
-    const workflows: WorkflowItem[] = [{ name: 'alpha.json', path: '/p/workflows/alpha.json' }]
+    const workflows: WorkflowItem[] = [{ name: 'alpha.json', path: '/p/workflows/alpha.json', scope: 'project' }]
     server.use(http.get(`${BASE}/workflows`, () => HttpResponse.json({ workflows })))
     const { router } = renderWorkflowList()
 
@@ -386,13 +392,30 @@ describe('WorkflowList navigation', () => {
 
     await screen.findByTestId('new-workflow-page')
     expect(router.state.location.pathname).toBe('/workflows/new')
-    expect(router.state.location.search).toEqual({ from: 'alpha' })
+    expect(router.state.location.search).toEqual({ from: 'alpha', scope: 'project' })
+  })
+
+  test("duplicating a global workflow carries scope=global into the new workflow route", async () => {
+    const user = userEvent.setup()
+    useCwdStore.getState().addCwd('proj', '/p')
+    const workflows: WorkflowItem[] = [
+      { name: 'shared.json', path: '/global/workflows/shared.json', scope: 'global' },
+    ]
+    server.use(http.get(`${BASE}/workflows`, () => HttpResponse.json({ workflows })))
+    const { router } = renderWorkflowList()
+
+    const row = await screen.findByTestId('workflow-row-shared')
+    await user.click(within(row).getByRole('link', { name: 'Duplicate' }))
+
+    await screen.findByTestId('new-workflow-page')
+    expect(router.state.location.pathname).toBe('/workflows/new')
+    expect(router.state.location.search).toEqual({ from: 'shared', scope: 'global' })
   })
 
   test('edit action navigates to the selected workflow editor route', async () => {
     const user = userEvent.setup()
     useCwdStore.getState().addCwd('proj', '/p')
-    const workflows: WorkflowItem[] = [{ name: 'alpha.json', path: '/p/workflows/alpha.json' }]
+    const workflows: WorkflowItem[] = [{ name: 'alpha.json', path: '/p/workflows/alpha.json', scope: 'project' }]
     server.use(http.get(`${BASE}/workflows`, () => HttpResponse.json({ workflows })))
     const { router } = renderWorkflowList()
 
@@ -405,7 +428,7 @@ describe('WorkflowList navigation', () => {
 
   test('action links are styled by the canonical Button primitive, not a hand-copied class string', async () => {
     useCwdStore.getState().addCwd('proj', '/p')
-    const workflows: WorkflowItem[] = [{ name: 'alpha.json', path: '/p/workflows/alpha.json' }]
+    const workflows: WorkflowItem[] = [{ name: 'alpha.json', path: '/p/workflows/alpha.json', scope: 'project' }]
     server.use(http.get(`${BASE}/workflows`, () => HttpResponse.json({ workflows })))
     renderWorkflowList()
 
@@ -424,13 +447,180 @@ describe('WorkflowList navigation', () => {
   })
 })
 
+describe('WorkflowList scope badges', () => {
+  test('renders project and global rows, each with the matching scope badge', async () => {
+    useCwdStore.getState().addCwd('proj', '/p')
+    const workflows: WorkflowItem[] = [
+      { name: 'alpha.json', path: '/p/workflows/alpha.json', scope: 'project' },
+      { name: 'shared.json', path: '/global/workflows/shared.json', scope: 'global' },
+    ]
+    server.use(http.get(`${BASE}/workflows`, () => HttpResponse.json({ workflows })))
+
+    renderWorkflowList()
+
+    const projectRow = await screen.findByTestId('workflow-row-alpha')
+    const globalRow = screen.getByTestId('workflow-row-shared')
+    expect(within(projectRow).getByTestId('workflow-scope-badge')).toHaveTextContent('Project')
+    expect(within(globalRow).getByTestId('workflow-scope-badge')).toHaveTextContent('Global')
+  })
+
+  test('same-named workflows in different scopes both render without a duplicate-key warning', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    useCwdStore.getState().addCwd('proj', '/p')
+    const workflows: WorkflowItem[] = [
+      { name: 'deploy.json', path: '/p/workflows/deploy.json', scope: 'project' },
+      { name: 'deploy.json', path: '/global/workflows/deploy.json', scope: 'global' },
+    ]
+    server.use(http.get(`${BASE}/workflows`, () => HttpResponse.json({ workflows })))
+
+    renderWorkflowList()
+
+    await waitFor(() => expect(screen.getAllByTestId('workflow-row-deploy')).toHaveLength(2))
+    const badges = screen.getAllByTestId('workflow-scope-badge')
+    const labels = badges.map(badge => badge.textContent)
+    expect(labels).toEqual(expect.arrayContaining(['Project', 'Global']))
+
+    const duplicateKeyWarnings = errorSpy.mock.calls.filter(call =>
+      String(call[0]).toLowerCase().includes('same key'),
+    )
+    expect(duplicateKeyWarnings).toHaveLength(0)
+    errorSpy.mockRestore()
+  })
+
+  test('confirming delete on one of two same-named rows activates only that row', async () => {
+    const user = userEvent.setup()
+    useCwdStore.getState().addCwd('proj', '/p')
+    const workflows: WorkflowItem[] = [
+      { name: 'deploy.json', path: '/p/workflows/deploy.json', scope: 'project' },
+      { name: 'deploy.json', path: '/global/workflows/deploy.json', scope: 'global' },
+    ]
+    server.use(http.get(`${BASE}/workflows`, () => HttpResponse.json({ workflows })))
+
+    renderWorkflowList()
+
+    await waitFor(() => expect(screen.getAllByTestId('workflow-row-deploy')).toHaveLength(2))
+    const rows = screen.getAllByTestId('workflow-row-deploy')
+    const projectRow = rows.find(
+      row => within(row).getByTestId('workflow-scope-badge').dataset.scope === 'project',
+    )!
+    const globalRow = rows.find(
+      row => within(row).getByTestId('workflow-scope-badge').dataset.scope === 'global',
+    )!
+
+    await user.click(within(projectRow).getByRole('button', { name: 'Delete' }))
+
+    // Only the clicked (project) row enters the confirming state; the same-named
+    // global row keeps its default Delete action.
+    expect(within(projectRow).getByRole('button', { name: 'Confirm' })).toBeInTheDocument()
+    expect(within(projectRow).queryByRole('button', { name: 'Delete' })).not.toBeInTheDocument()
+    expect(within(globalRow).getByRole('button', { name: 'Delete' })).toBeInTheDocument()
+    expect(within(globalRow).queryByRole('button', { name: 'Confirm' })).not.toBeInTheDocument()
+  })
+
+  test('starting a run on one of two same-named rows shows "Starting…" only on that row', async () => {
+    const user = userEvent.setup()
+    useCwdStore.getState().addCwd('proj', '/p')
+    const workflows: WorkflowItem[] = [
+      { name: 'deploy.json', path: '/p/workflows/deploy.json', scope: 'project' },
+      { name: 'deploy.json', path: '/global/workflows/deploy.json', scope: 'global' },
+    ]
+    server.use(
+      http.get(`${BASE}/workflows`, () => HttpResponse.json({ workflows })),
+      http.post(`${BASE}/runs`, async () => {
+        await delay('infinite')
+        return HttpResponse.json({ runId: 'run-1', slug: 'deploy-run' })
+      }),
+    )
+
+    renderWorkflowList()
+
+    await waitFor(() => expect(screen.getAllByTestId('workflow-row-deploy')).toHaveLength(2))
+    const rows = screen.getAllByTestId('workflow-row-deploy')
+    const projectRow = rows.find(
+      row => within(row).getByTestId('workflow-scope-badge').dataset.scope === 'project',
+    )!
+    const globalRow = rows.find(
+      row => within(row).getByTestId('workflow-scope-badge').dataset.scope === 'global',
+    )!
+
+    await user.click(within(projectRow).getByRole('button', { name: 'Run' }))
+
+    expect(await within(projectRow).findByRole('button', { name: 'Starting…' })).toBeInTheDocument()
+    expect(within(globalRow).getByRole('button', { name: 'Run' })).toBeInTheDocument()
+    expect(within(globalRow).queryByRole('button', { name: 'Starting…' })).not.toBeInTheDocument()
+  })
+})
+
+describe('WorkflowList scope routing', () => {
+  test("a row's edit action carries that row's scope into the editor route", async () => {
+    const user = userEvent.setup()
+    useCwdStore.getState().addCwd('proj', '/p')
+    const workflows: WorkflowItem[] = [
+      { name: 'shared.json', path: '/global/workflows/shared.json', scope: 'global' },
+    ]
+    server.use(http.get(`${BASE}/workflows`, () => HttpResponse.json({ workflows })))
+    const { router } = renderWorkflowList()
+
+    const row = await screen.findByTestId('workflow-row-shared')
+    await user.click(within(row).getByRole('link', { name: 'Edit' }))
+
+    const editPage = await screen.findByTestId('edit-workflow-page')
+    expect(editPage).toHaveAttribute('data-scope', 'global')
+    expect(router.state.location.pathname).toBe('/workflows/shared/edit')
+    expect(router.state.location.search).toEqual({ scope: 'global' })
+  })
+
+  test("a row's delete action sends DELETE with that row's scope", async () => {
+    const user = userEvent.setup()
+    useCwdStore.getState().addCwd('proj', '/p')
+    let deletedScope: string | null = null
+    server.use(
+      http.get(`${BASE}/workflows`, () =>
+        HttpResponse.json({
+          workflows: [{ name: 'shared.json', path: '/global/workflows/shared.json', scope: 'global' }],
+        }),
+      ),
+      http.delete(`${BASE}/workflows/:name`, ({ request }) => {
+        deletedScope = new URL(request.url).searchParams.get('scope')
+        return HttpResponse.json({ deleted: 'shared' })
+      }),
+    )
+
+    renderWorkflowList()
+
+    const row = await screen.findByTestId('workflow-row-shared')
+    await user.click(within(row).getByRole('button', { name: 'Delete' }))
+    await user.click(within(row).getByRole('button', { name: 'Confirm' }))
+
+    await waitFor(() => expect(deletedScope).toBe('global'))
+  })
+})
+
 describe('WorkflowList integration', () => {
+  test('a combined list from the hook shows global and project rows together with badges', async () => {
+    useCwdStore.getState().addCwd('proj', '/p')
+    const workflows: WorkflowItem[] = [
+      { name: 'project-flow.json', path: '/p/workflows/project-flow.json', scope: 'project' },
+      { name: 'global-flow.json', path: '/global/workflows/global-flow.json', scope: 'global' },
+    ]
+    server.use(http.get(`${BASE}/workflows`, () => HttpResponse.json({ workflows })))
+
+    renderWorkflowList()
+
+    const projectRow = await screen.findByTestId('workflow-row-project-flow')
+    const globalRow = screen.getByTestId('workflow-row-global-flow')
+    expect(within(projectRow).getByText('Project')).toBeInTheDocument()
+    expect(within(globalRow).getByText('Global')).toBeInTheDocument()
+    expect(within(projectRow).getByText('/p/workflows/project-flow.json')).toBeInTheDocument()
+    expect(within(globalRow).getByText('/global/workflows/global-flow.json')).toBeInTheDocument()
+  })
+
   test('MSW list renders and delete removes a row after refetch', async () => {
     const user = userEvent.setup()
     useCwdStore.getState().addCwd('proj', '/p')
     let workflows: WorkflowItem[] = [
-      { name: 'alpha.json', path: '/p/workflows/alpha.json' },
-      { name: 'beta.json', path: '/p/workflows/beta.json' },
+      { name: 'alpha.json', path: '/p/workflows/alpha.json', scope: 'project' },
+      { name: 'beta.json', path: '/p/workflows/beta.json', scope: 'project' },
     ]
 
     server.use(

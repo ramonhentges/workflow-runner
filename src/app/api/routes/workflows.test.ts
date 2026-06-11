@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -33,29 +33,58 @@ function makeTempCwd(): { cwd: string; cleanup: () => Promise<void> } {
   };
 }
 
+// Each test runs with an isolated global directory (ADR-002) rooted at a temp
+// XDG_STATE_HOME, so the always-included global portion is empty unless a test
+// populates it. This keeps project-only assertions deterministic.
+let prevXdgStateHome: string | undefined;
+let globalRoot: string;
+let globalWorkflowsDir: string;
+
+beforeEach(() => {
+  prevXdgStateHome = process.env.XDG_STATE_HOME;
+  globalRoot = mkdtempSync(join(tmpdir(), "workflows-global-"));
+  process.env.XDG_STATE_HOME = globalRoot;
+  globalWorkflowsDir = join(globalRoot, "workflow-runner", "workflows");
+});
+
+afterEach(async () => {
+  if (prevXdgStateHome === undefined) delete process.env.XDG_STATE_HOME;
+  else process.env.XDG_STATE_HOME = prevXdgStateHome;
+  await rm(globalRoot, { recursive: true, force: true }).catch(() => {});
+});
+
+function writeGlobalWorkflow(name: string, content = "{}"): void {
+  mkdirSync(globalWorkflowsDir, { recursive: true });
+  writeFileSync(join(globalWorkflowsDir, name), content);
+}
+
 // ---------------------------------------------------------------------------
 // Unit tests — GET /workflows
 // ---------------------------------------------------------------------------
 
 describe("GET /workflows — unit", () => {
-  it("returns 400 when cwd query is missing", async () => {
+  it("returns 200 with only global items when cwd query is missing", async () => {
+    writeGlobalWorkflow("g.json");
     const app = createApiApp(makePartialRm());
     const res = await app.request("/workflows");
-    expect(res.status).toBe(400);
-    const body = await res.json() as Record<string, unknown>;
-    expect(body.code).toBe("MISSING_CWD");
-    expect(typeof body.message).toBe("string");
+    expect(res.status).toBe(200);
+    const body = await res.json() as { workflows: { name: string; scope: string }[] };
+    expect(body.workflows).toHaveLength(1);
+    expect(body.workflows[0]!.name).toBe("g.json");
+    expect(body.workflows[0]!.scope).toBe("global");
   });
 
-  it("returns 400 when cwd is empty string", async () => {
+  it("returns 200 with only global items when cwd is empty string", async () => {
+    writeGlobalWorkflow("g.json");
     const app = createApiApp(makePartialRm());
     const res = await app.request("/workflows?cwd=");
-    expect(res.status).toBe(400);
-    const body = await res.json() as Record<string, unknown>;
-    expect(body.code).toBe("MISSING_CWD");
+    expect(res.status).toBe(200);
+    const body = await res.json() as { workflows: { scope: string }[] };
+    expect(body.workflows).toHaveLength(1);
+    expect(body.workflows[0]!.scope).toBe("global");
   });
 
-  it("returns 200 with empty list when workflows/ folder is absent", async () => {
+  it("returns 200 with empty list when neither project nor global dir exists", async () => {
     const { cwd, cleanup } = makeTempCwd();
     try {
       const app = createApiApp(makePartialRm());
@@ -89,7 +118,7 @@ describe("GET /workflows — unit", () => {
     }
   });
 
-  it("returns absolute paths for each workflow", async () => {
+  it("returns absolute paths and project scope for each project workflow", async () => {
     const { cwd, cleanup } = makeTempCwd();
     try {
       const workflowsDir = join(cwd, "workflows");
@@ -99,11 +128,12 @@ describe("GET /workflows — unit", () => {
       const app = createApiApp(makePartialRm());
       const res = await app.request(`/workflows?cwd=${encodeURIComponent(cwd)}`);
       expect(res.status).toBe(200);
-      const body = await res.json() as { workflows: { name: string; path: string }[] };
+      const body = await res.json() as { workflows: { name: string; path: string; scope: string }[] };
       expect(body.workflows).toHaveLength(1);
       const wf = body.workflows[0]!;
       expect(wf.name).toBe("a.json");
       expect(wf.path).toBe(join(workflowsDir, "a.json"));
+      expect(wf.scope).toBe("project");
       // Path must be absolute.
       expect(wf.path.startsWith("/")).toBe(true);
     } finally {
@@ -187,7 +217,7 @@ describe("GET /workflows — unit", () => {
     }
   });
 
-  it("each workflow entry has name and path fields", async () => {
+  it("each workflow entry has name, path, and scope fields", async () => {
     const { cwd, cleanup } = makeTempCwd();
     try {
       const workflowsDir = join(cwd, "workflows");
@@ -202,6 +232,161 @@ describe("GET /workflows — unit", () => {
       const entry = body.workflows[0]!;
       expect(typeof entry.name).toBe("string");
       expect(typeof entry.path).toBe("string");
+      expect(entry.scope).toBe("project");
+    } finally {
+      await cleanup();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Unit tests — combined scope-tagged list (task_03)
+// ---------------------------------------------------------------------------
+
+describe("GET /workflows — combined scope tagging", () => {
+  it("with cwd set and globals present, returns both, each correctly scoped", async () => {
+    const { cwd, cleanup } = makeTempCwd();
+    try {
+      const workflowsDir = join(cwd, "workflows");
+      mkdirSync(workflowsDir);
+      writeFileSync(join(workflowsDir, "p.json"), "{}");
+      writeGlobalWorkflow("g.json");
+
+      const app = createApiApp(makePartialRm());
+      const res = await app.request(`/workflows?cwd=${encodeURIComponent(cwd)}`);
+      expect(res.status).toBe(200);
+      const body = await res.json() as { workflows: { name: string; scope: string }[] };
+      const byName = new Map(body.workflows.map((w) => [w.name, w.scope]));
+      expect(byName.get("p.json")).toBe("project");
+      expect(byName.get("g.json")).toBe("global");
+      expect(body.workflows).toHaveLength(2);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("with cwd set and no global dir, returns only project items (no error)", async () => {
+    const { cwd, cleanup } = makeTempCwd();
+    try {
+      const workflowsDir = join(cwd, "workflows");
+      mkdirSync(workflowsDir);
+      writeFileSync(join(workflowsDir, "p.json"), "{}");
+      // globalWorkflowsDir intentionally not created.
+
+      const app = createApiApp(makePartialRm());
+      const res = await app.request(`/workflows?cwd=${encodeURIComponent(cwd)}`);
+      expect(res.status).toBe(200);
+      const body = await res.json() as { workflows: { name: string; scope: string }[] };
+      expect(body.workflows).toHaveLength(1);
+      expect(body.workflows[0]!.name).toBe("p.json");
+      expect(body.workflows[0]!.scope).toBe("project");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("with cwd omitted, returns only global items (no MISSING_CWD error)", async () => {
+    writeGlobalWorkflow("g1.json");
+    writeGlobalWorkflow("g2.json");
+    const app = createApiApp(makePartialRm());
+    const res = await app.request("/workflows");
+    expect(res.status).toBe(200);
+    const body = await res.json() as { workflows: { name: string; scope: string }[] };
+    const names = body.workflows.map((w) => w.name).sort();
+    expect(names).toEqual(["g1.json", "g2.json"]);
+    expect(body.workflows.every((w) => w.scope === "global")).toBe(true);
+  });
+
+  it("project dir ENOENT yields empty project portion while globals still list", async () => {
+    const { cwd, cleanup } = makeTempCwd();
+    try {
+      // No <cwd>/workflows directory (ENOENT).
+      writeGlobalWorkflow("g.json");
+
+      const app = createApiApp(makePartialRm());
+      const res = await app.request(`/workflows?cwd=${encodeURIComponent(cwd)}`);
+      expect(res.status).toBe(200);
+      const body = await res.json() as { workflows: { name: string; scope: string }[] };
+      expect(body.workflows).toHaveLength(1);
+      expect(body.workflows[0]!.name).toBe("g.json");
+      expect(body.workflows[0]!.scope).toBe("global");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("project dir is a file (ENOTDIR) but globals exist → 200 global-only list", async () => {
+    const { cwd, cleanup } = makeTempCwd();
+    try {
+      // <cwd>/workflows is a regular file (ENOTDIR when read as a directory).
+      writeFileSync(join(cwd, "workflows"), "not a directory");
+      writeGlobalWorkflow("g.json");
+
+      const app = createApiApp(makePartialRm());
+      const res = await app.request(`/workflows?cwd=${encodeURIComponent(cwd)}`);
+      expect(res.status).toBe(200);
+      const body = await res.json() as { workflows: { name: string; scope: string }[] };
+      expect(body.workflows).toHaveLength(1);
+      expect(body.workflows[0]!.name).toBe("g.json");
+      expect(body.workflows[0]!.scope).toBe("global");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("project dir is unreadable (EACCES) but globals exist → 200 global-only list", async () => {
+    if (process.getuid?.() === 0) return; // root bypasses permission checks
+    const { cwd, cleanup } = makeTempCwd();
+    try {
+      const workflowsDir = join(cwd, "workflows");
+      mkdirSync(workflowsDir);
+      chmodSync(workflowsDir, 0o000);
+      writeGlobalWorkflow("g.json");
+
+      const app = createApiApp(makePartialRm());
+      const res = await app.request(`/workflows?cwd=${encodeURIComponent(cwd)}`);
+      expect(res.status).toBe(200);
+      const body = await res.json() as { workflows: { name: string; scope: string }[] };
+      expect(body.workflows).toHaveLength(1);
+      expect(body.workflows[0]!.name).toBe("g.json");
+      expect(body.workflows[0]!.scope).toBe("global");
+    } finally {
+      try { chmodSync(join(cwd, "workflows"), 0o755); } catch { /* ignore */ }
+      await cleanup();
+    }
+  });
+
+  it("project dir is a file (ENOTDIR) and no globals → 400 INVALID_CWD (no recourse)", async () => {
+    const { cwd, cleanup } = makeTempCwd();
+    try {
+      writeFileSync(join(cwd, "workflows"), "not a directory");
+      // No global workflows written: globalWorkflowsDir is empty.
+
+      const app = createApiApp(makePartialRm());
+      const res = await app.request(`/workflows?cwd=${encodeURIComponent(cwd)}`);
+      expect(res.status).toBe(400);
+      const body = await res.json() as Record<string, unknown>;
+      expect(body.code).toBe("INVALID_CWD");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("a global and project workflow sharing a name appear as two scoped items", async () => {
+    const { cwd, cleanup } = makeTempCwd();
+    try {
+      const workflowsDir = join(cwd, "workflows");
+      mkdirSync(workflowsDir);
+      writeFileSync(join(workflowsDir, "dup.json"), "{}");
+      writeGlobalWorkflow("dup.json");
+
+      const app = createApiApp(makePartialRm());
+      const res = await app.request(`/workflows?cwd=${encodeURIComponent(cwd)}`);
+      expect(res.status).toBe(200);
+      const body = await res.json() as { workflows: { name: string; scope: string }[] };
+      const dups = body.workflows.filter((w) => w.name === "dup.json");
+      expect(dups).toHaveLength(2);
+      expect(dups.map((w) => w.scope).sort()).toEqual(["global", "project"]);
     } finally {
       await cleanup();
     }
@@ -224,26 +409,48 @@ describe("GET /workflows — integration", () => {
       const app = createApiApp(makePartialRm());
       const res = await app.request(`/workflows?cwd=${encodeURIComponent(cwd)}`);
       expect(res.status).toBe(200);
-      const body = await res.json() as { workflows: { name: string; path: string }[] };
+      const body = await res.json() as { workflows: { name: string; path: string; scope: string }[] };
       expect(Array.isArray(body.workflows)).toBe(true);
       expect(body.workflows).toHaveLength(2);
       for (const wf of body.workflows) {
         expect(typeof wf.name).toBe("string");
         expect(typeof wf.path).toBe("string");
         expect(wf.name.endsWith(".json")).toBe(true);
+        expect(wf.scope).toBe("project");
       }
     } finally {
       await cleanup();
     }
   });
 
-  it("missing cwd returns documented 400 shape", async () => {
+  it("after POST ?scope=global, the new global workflow appears in GET /workflows tagged global", async () => {
     const app = createApiApp(makePartialRm());
-    const res = await app.request("/workflows");
-    expect(res.status).toBe(400);
-    const body = await res.json() as Record<string, unknown>;
-    expect(typeof body.code).toBe("string");
-    expect(typeof body.message).toBe("string");
+
+    const validWorkflow = {
+      id: "wf",
+      name: "Workflow",
+      description: "Test",
+      version: "1",
+      steps: [
+        { id: "s1", agent: "a", model: "m", mode: "autonomous", description: "d", ide: "opencode", edges: [] },
+      ],
+    };
+
+    const createRes = await app.request("/workflows?scope=global", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "created-global", workflow: validWorkflow }),
+    });
+    expect(createRes.status).toBe(201);
+    const created = await createRes.json() as { scope: string };
+    expect(created.scope).toBe("global");
+
+    const listRes = await app.request("/workflows");
+    expect(listRes.status).toBe(200);
+    const body = await listRes.json() as { workflows: { name: string; scope: string }[] };
+    const entry = body.workflows.find((w) => w.name === "created-global.json");
+    expect(entry).toBeDefined();
+    expect(entry!.scope).toBe("global");
   });
 
   it("absent workflows folder returns documented 200 shape with empty list", async () => {

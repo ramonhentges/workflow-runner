@@ -119,15 +119,23 @@ export const DiscoveryFileSchema = z.object({
 });
 export type DiscoveryFile = z.infer<typeof DiscoveryFileSchema>;
 
-// GET /workflows?cwd= (ADR-006).
+// Workflow scope discriminator (ADR-003). "global" workflows live in the daemon
+// state root (ADR-002); "project" workflows live under <cwd>/workflows.
+export const WorkflowScopeSchema = z.enum(["global", "project"]);
+export type WorkflowScope = z.infer<typeof WorkflowScopeSchema>;
+
+// GET /workflows?cwd= (ADR-006). CRUD routes also accept ?scope=, defaulting to
+// "project" when omitted (back-compat).
 export const WorkflowsQuerySchema = z.object({
   cwd: z.string().optional(),
+  scope: WorkflowScopeSchema.optional(),
 });
 export type WorkflowsQuery = z.infer<typeof WorkflowsQuerySchema>;
 
 export const WorkflowItemSchema = z.object({
   name: z.string(),
   path: z.string(),
+  scope: WorkflowScopeSchema,
 });
 export type WorkflowItem = z.infer<typeof WorkflowItemSchema>;
 
@@ -161,10 +169,12 @@ export const WorkflowUpdateBodySchema = z.object({
 });
 export type WorkflowUpdateBody = z.infer<typeof WorkflowUpdateBodySchema>;
 
-// GET /workflows/:name response.
+// GET /workflows/:name response. Carries the resolved `scope` (ADR-003) so
+// callers know which directory the document was read from / written to.
 export const WorkflowDocSchema = z.object({
   name: z.string(),
   path: z.string(),
+  scope: WorkflowScopeSchema,
   workflow: z.unknown(),
 });
 export type WorkflowDoc = z.infer<typeof WorkflowDocSchema>;

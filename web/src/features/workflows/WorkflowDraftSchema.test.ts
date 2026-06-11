@@ -235,6 +235,7 @@ describe('workflowDocToFormData', () => {
   const sampleDoc = {
     name: 'who-is',
     path: '/p/workflows/who-is.json',
+    scope: 'project' as const,
     workflow: {
       id: 'who-is-id',
       name: 'Who Is',
@@ -285,7 +286,7 @@ describe('workflowDocToFormData', () => {
   })
 
   test('handles missing or malformed workflow fields gracefully', () => {
-    const doc = { name: 'empty', path: '/p/empty.json', workflow: {} }
+    const doc = { name: 'empty', path: '/p/empty.json', scope: 'project' as const, workflow: {} }
     const form = workflowDocToFormData(doc)
     expect(form.fileName).toBe('empty')
     expect(form.workflowId).toBe('')
@@ -304,7 +305,7 @@ describe('workflowDocToFormData', () => {
   })
 
   test('duplicate mode leaves an empty source id/name empty', () => {
-    const doc = { name: 'empty', path: '/p/empty.json', workflow: {} }
+    const doc = { name: 'empty', path: '/p/empty.json', scope: 'project' as const, workflow: {} }
     const form = workflowDocToFormData(doc, '')
     expect(form.workflowId).toBe('')
     expect(form.workflowName).toBe('')

@@ -453,6 +453,9 @@ export function createPerConnectionState(
           slug: snapshot.slug,
           workflowPath: snapshot.workflowPath,
           cwd: snapshot.cwd,
+          // Present only for isolated runs (ADR-004); surfaced on the run-detail view.
+          worktreePath: snapshot.worktreePath,
+          branch: snapshot.branch,
           status: snapshot.status,
           currentStepId: snapshot.currentStepId,
           visitedStepIds: snapshot.visitedStepIds,

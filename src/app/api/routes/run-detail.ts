@@ -67,6 +67,8 @@ export function registerRunDetailRoute(app: ApiApp, rm: RunManager): void {
         slug: snap.slug,
         workflowPath: snap.workflowPath,
         cwd: snap.cwd,
+        worktreePath: snap.worktreePath,
+        branch: snap.branch,
         status: snap.status,
         currentStepId: snap.currentStepId,
         visitedStepIds: snap.visitedStepIds,

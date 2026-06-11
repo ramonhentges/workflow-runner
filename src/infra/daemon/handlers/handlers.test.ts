@@ -33,8 +33,10 @@ function makeSnapshot(overrides: {
   kickoffPrompts?: Record<StepId, string>;
   startedAt?: number;
   endedAt?: number | null;
+  worktreePath?: string;
+  branch?: string;
 } = {}): RunSnapshot {
-  return {
+  const snap: RunSnapshot = {
     id: asRunId(overrides.id ?? "abc12345"),
     slug: asRunSlug(overrides.slug ?? "brave-otter"),
     workflowPath: "/tmp/wf.json",
@@ -45,6 +47,9 @@ function makeSnapshot(overrides: {
     startedAt: overrides.startedAt ?? Date.now() - 1000,
     endedAt: overrides.endedAt ?? null,
   };
+  if (overrides.worktreePath !== undefined) snap.worktreePath = overrides.worktreePath;
+  if (overrides.branch !== undefined) snap.branch = overrides.branch;
+  return snap;
 }
 
 function makeActiveRun(snap: RunSnapshot, subscriberCount = 0): ActiveRun {
@@ -102,6 +107,75 @@ describe("createRunStartHandler", () => {
     expect(startRunCalls).toHaveLength(1);
     expect(startRunCalls[0]!.cwd).toBe("/my/project");
     expect(startRunCalls[0]!.path).toBe("/tmp/wf.json");
+  });
+
+  it("forwards a provided branch to RunManager.startRun", async () => {
+    const expected = { runId: asRunId("abc12345"), slug: asRunSlug("brave-otter") };
+    const startRunCalls: Array<{ path: string; cwd: string; branch?: string }> = [];
+    const rm = {
+      startRun: async (path: string, cwd: string, branch?: string) => {
+        startRunCalls.push({ path, cwd, branch });
+        return expected;
+      },
+    } as unknown as RunManager;
+
+    const handler = createRunStartHandler(rm);
+    await handler(
+      { workflowPath: "/tmp/wf.json", cwd: "/my/project", branch: "feature/x" },
+      noopCtx,
+    );
+
+    expect(startRunCalls).toHaveLength(1);
+    expect(startRunCalls[0]!.branch).toBe("feature/x");
+  });
+
+  it("forwards undefined branch when omitted (non-isolated start)", async () => {
+    const expected = { runId: asRunId("abc12345"), slug: asRunSlug("brave-otter") };
+    const startRunCalls: Array<{ branch?: string }> = [];
+    const rm = {
+      startRun: async (_path: string, _cwd: string, branch?: string) => {
+        startRunCalls.push({ branch });
+        return expected;
+      },
+    } as unknown as RunManager;
+
+    const handler = createRunStartHandler(rm);
+    await handler({ workflowPath: "/tmp/wf.json", cwd: "/my/project" }, noopCtx);
+
+    expect(startRunCalls).toHaveLength(1);
+    expect(startRunCalls[0]!.branch).toBeUndefined();
+  });
+
+  it("maps RunManagerError(NOT_A_GIT_REPO) to the NOT_A_GIT_REPO RPC error", async () => {
+    const rm = {
+      startRun: async () => {
+        throw new RunManagerError("NOT_A_GIT_REPO", "cwd is not in a git repository: /work");
+      },
+    } as unknown as RunManager;
+
+    const handler = createRunStartHandler(rm);
+    const err = await handler(
+      { workflowPath: "/tmp/wf.json", cwd: "/work", branch: "feature/x" },
+      noopCtx,
+    ).catch((e) => e);
+    expect(err).toBeInstanceOf(RpcError);
+    expect((err as RpcError).code).toBe(RpcErrorCode.NOT_A_GIT_REPO);
+  });
+
+  it("maps RunManagerError(WORKTREE_CONFLICT) to the WORKTREE_CONFLICT RPC error", async () => {
+    const rm = {
+      startRun: async () => {
+        throw new RunManagerError("WORKTREE_CONFLICT", "path already exists");
+      },
+    } as unknown as RunManager;
+
+    const handler = createRunStartHandler(rm);
+    const err = await handler(
+      { workflowPath: "/tmp/wf.json", cwd: "/work", branch: "feature/x" },
+      noopCtx,
+    ).catch((e) => e);
+    expect(err).toBeInstanceOf(RpcError);
+    expect((err as RpcError).code).toBe(RpcErrorCode.WORKTREE_CONFLICT);
   });
 
   it("maps WorkflowConfigError to WORKFLOW_INVALID", async () => {
@@ -319,6 +393,34 @@ describe("createRunPsHandler", () => {
 
     expect(result.runs[1]!.attachedCount).toBe(0);
     expect(result.runs[2]!.attachedCount).toBe(2);
+  });
+
+  it("emits worktreePath/branch for an isolated run and omits them for a non-isolated run", async () => {
+    const isolated = makeSnapshot({
+      id: "run00001",
+      slug: "brave-otter",
+      status: "running",
+      worktreePath: "/work/app-feature-x",
+      branch: "feature/x",
+    });
+    const plain = makeSnapshot({ id: "run00002", slug: "wise-fox", status: "running" });
+
+    const rm: PartialRunManager = {
+      list: () => [isolated, plain],
+      get: (id: string) => {
+        if (id === "run00001") return makeActiveRun(isolated);
+        if (id === "run00002") return makeActiveRun(plain);
+        return undefined;
+      },
+    } as unknown as PartialRunManager;
+
+    const handler = createRunPsHandler(rm as unknown as RunManager);
+    const result = await handler({}, noopCtx);
+
+    expect(result.runs[0]!.worktreePath).toBe("/work/app-feature-x");
+    expect(result.runs[0]!.branch).toBe("feature/x");
+    expect(result.runs[1]!.worktreePath).toBeUndefined();
+    expect(result.runs[1]!.branch).toBeUndefined();
   });
 
   it("passes includeOldTerminal: true to list() when all: true", async () => {

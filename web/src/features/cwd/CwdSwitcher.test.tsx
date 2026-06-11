@@ -89,6 +89,29 @@ describe('CwdSwitcher', () => {
 
     expect(useCwdStore.getState().cwds).toHaveLength(0)
   })
+
+  test('orders directories alphabetically by label in the dropdown and dialog list', async () => {
+    const user = userEvent.setup()
+    // Add out of alphabetical order; insertion order would be Zeta, alpha, Mango.
+    useCwdStore.getState().addCwd('Zeta', '/z')
+    useCwdStore.getState().addCwd('alpha', '/a')
+    useCwdStore.getState().addCwd('Mango', '/m')
+    render(<CwdSwitcher />)
+
+    await user.click(screen.getByRole('combobox', { name: 'Active working directory' }))
+    const optionLabels = screen
+      .getAllByRole('option')
+      .map(option => option.textContent?.replace(/\/[a-z]$/, '').trim())
+    expect(optionLabels).toEqual(['alpha', 'Mango', 'Zeta'])
+    // Close the dropdown so the rest of the page is no longer aria-hidden.
+    await user.keyboard('{Escape}')
+
+    const dialog = await openManageDialog(user)
+    const removeLabels = within(dialog)
+      .getAllByRole('button', { name: /^Remove / })
+      .map(button => button.getAttribute('aria-label')?.replace('Remove ', ''))
+    expect(removeLabels).toEqual(['alpha', 'Mango', 'Zeta'])
+  })
 })
 
 describe('CwdSwitcher form validation', () => {

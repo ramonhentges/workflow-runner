@@ -19,6 +19,7 @@ import {
 } from '@/components/ui/sidebar'
 import { Separator } from '@/components/ui/separator'
 import { ModeToggle } from '@/components/mode-toggle'
+import { useCwdStore } from '@/stores/cwd-store'
 
 const NAV_ITEMS = [
   { to: '/', label: 'Dashboard', exact: true },
@@ -39,6 +40,21 @@ function DaemonStatus() {
     <span className="flex items-center gap-1.5" title={label} aria-label={label}>
       <span className={`size-2 rounded-full ${dot}`} data-testid="daemon-status-dot" />
       <span className="text-xs text-muted-foreground">{label}</span>
+    </span>
+  )
+}
+
+function WorkingDirLabel() {
+  const activeCwd = useCwdStore(state => state.activeCwd())
+  if (!activeCwd) return null
+
+  return (
+    <span
+      className="truncate text-sm text-muted-foreground"
+      title={activeCwd.path}
+      data-testid="working-dir-label"
+    >
+      {activeCwd.label}
     </span>
   )
 }
@@ -86,6 +102,7 @@ export function AppShell() {
         <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
           <SidebarTrigger />
           <Separator orientation="vertical" className="h-4" />
+          <WorkingDirLabel />
           {/* Header action slot — ModeToggle mounts here (Task 9). */}
           <div className="ml-auto flex items-center gap-2" data-testid="header-actions">
             <ModeToggle />

@@ -486,6 +486,69 @@ describe('WorkflowList scope badges', () => {
     expect(duplicateKeyWarnings).toHaveLength(0)
     errorSpy.mockRestore()
   })
+
+  test('confirming delete on one of two same-named rows activates only that row', async () => {
+    const user = userEvent.setup()
+    useCwdStore.getState().addCwd('proj', '/p')
+    const workflows: WorkflowItem[] = [
+      { name: 'deploy.json', path: '/p/workflows/deploy.json', scope: 'project' },
+      { name: 'deploy.json', path: '/global/workflows/deploy.json', scope: 'global' },
+    ]
+    server.use(http.get(`${BASE}/workflows`, () => HttpResponse.json({ workflows })))
+
+    renderWorkflowList()
+
+    await waitFor(() => expect(screen.getAllByTestId('workflow-row-deploy')).toHaveLength(2))
+    const rows = screen.getAllByTestId('workflow-row-deploy')
+    const projectRow = rows.find(
+      row => within(row).getByTestId('workflow-scope-badge').dataset.scope === 'project',
+    )!
+    const globalRow = rows.find(
+      row => within(row).getByTestId('workflow-scope-badge').dataset.scope === 'global',
+    )!
+
+    await user.click(within(projectRow).getByRole('button', { name: 'Delete' }))
+
+    // Only the clicked (project) row enters the confirming state; the same-named
+    // global row keeps its default Delete action.
+    expect(within(projectRow).getByRole('button', { name: 'Confirm' })).toBeInTheDocument()
+    expect(within(projectRow).queryByRole('button', { name: 'Delete' })).not.toBeInTheDocument()
+    expect(within(globalRow).getByRole('button', { name: 'Delete' })).toBeInTheDocument()
+    expect(within(globalRow).queryByRole('button', { name: 'Confirm' })).not.toBeInTheDocument()
+  })
+
+  test('starting a run on one of two same-named rows shows "Starting…" only on that row', async () => {
+    const user = userEvent.setup()
+    useCwdStore.getState().addCwd('proj', '/p')
+    const workflows: WorkflowItem[] = [
+      { name: 'deploy.json', path: '/p/workflows/deploy.json', scope: 'project' },
+      { name: 'deploy.json', path: '/global/workflows/deploy.json', scope: 'global' },
+    ]
+    server.use(
+      http.get(`${BASE}/workflows`, () => HttpResponse.json({ workflows })),
+      http.post(`${BASE}/runs`, async () => {
+        await delay('infinite')
+        return HttpResponse.json({ runId: 'run-1', slug: 'deploy-run' })
+      }),
+    )
+
+    renderWorkflowList()
+
+    await waitFor(() => expect(screen.getAllByTestId('workflow-row-deploy')).toHaveLength(2))
+    const rows = screen.getAllByTestId('workflow-row-deploy')
+    const projectRow = rows.find(
+      row => within(row).getByTestId('workflow-scope-badge').dataset.scope === 'project',
+    )!
+    const globalRow = rows.find(
+      row => within(row).getByTestId('workflow-scope-badge').dataset.scope === 'global',
+    )!
+
+    await user.click(within(projectRow).getByRole('button', { name: 'Run' }))
+
+    expect(await within(projectRow).findByRole('button', { name: 'Starting…' })).toBeInTheDocument()
+    expect(within(globalRow).getByRole('button', { name: 'Run' })).toBeInTheDocument()
+    expect(within(globalRow).queryByRole('button', { name: 'Starting…' })).not.toBeInTheDocument()
+  })
 })
 
 describe('WorkflowList scope routing', () => {

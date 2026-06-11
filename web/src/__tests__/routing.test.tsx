@@ -296,6 +296,53 @@ describe('new workflow route duplicate seeding', () => {
 
     await waitFor(() => expect(capturedScope).toBe('project'))
   })
+
+  test('duplicating a global workflow pre-selects the Global scope toggle', async () => {
+    server.use(
+      http.get(`${BASE}/workflows/:name`, ({ params }) =>
+        HttpResponse.json({
+          name: String(params.name),
+          path: `/state/workflow-runner/workflows/${String(params.name)}.json`,
+          scope: 'global',
+          workflow: { id: 'shared', name: 'Shared', version: '1.0', steps: [] },
+        }),
+      ),
+    )
+
+    renderApp('/workflows/new?from=shared&scope=global')
+
+    // Create editor opens with the toggle seeded from the source scope.
+    const globalToggle = await screen.findByTestId('scope-toggle-global')
+    expect(globalToggle).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByTestId('scope-toggle-project')).toHaveAttribute('aria-pressed', 'false')
+  })
+
+  test('a plain create (no scope) keeps the Project scope toggle selected', async () => {
+    renderApp('/workflows/new')
+
+    const projectToggle = await screen.findByTestId('scope-toggle-project')
+    expect(projectToggle).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByTestId('scope-toggle-global')).toHaveAttribute('aria-pressed', 'false')
+  })
+
+  test('a failed source read surfaces an error state instead of a blank editor', async () => {
+    server.use(
+      http.get(`${BASE}/workflows/:name`, () =>
+        HttpResponse.json({ error: { code: 'INTERNAL' } }, { status: 500 }),
+      ),
+    )
+
+    renderApp('/workflows/new?from=gone&scope=global')
+
+    // Error branch renders with a link back to /workflows; the blank create
+    // editor must not appear.
+    expect(await screen.findByTestId('workflow-duplicate-error')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Back to workflows' })).toHaveAttribute(
+      'href',
+      '/workflows',
+    )
+    expect(screen.queryByTestId('workflow-editor-form')).not.toBeInTheDocument()
+  })
 })
 
 // ─── Integration: full operate loop ──────────────────────────────────────────

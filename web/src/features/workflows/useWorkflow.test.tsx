@@ -210,6 +210,73 @@ describe('useUpdateWorkflow', () => {
       queryKey: workflowListQueryKey('/p'),
     })
   })
+
+  test('seeds the per-workflow cache with the saved doc so re-open shows fresh content', async () => {
+    useCwdStore.getState().addCwd('proj', '/p')
+
+    const savedDoc = {
+      name: 'edit',
+      path: '/global/workflows/edit.json',
+      scope: 'global' as const,
+      workflow: { id: 'edited' },
+    }
+    server.use(http.put(`${BASE}/workflows/:name`, () => HttpResponse.json(savedDoc)))
+
+    const queryClient = makeQueryClient()
+    // Prime the per-workflow cache with the stale pre-edit doc the editor would read.
+    queryClient.setQueryData(workflowQueryKey('/p', 'global', 'edit'), {
+      name: 'edit',
+      path: '/global/workflows/edit.json',
+      scope: 'global',
+      workflow: { id: 'stale' },
+    })
+
+    const { result } = renderHook(() => useUpdateWorkflow(), {
+      wrapper: makeHookWrapper(queryClient),
+    })
+
+    result.current.mutate({ scope: 'global', name: 'edit', body: { workflow: { id: 'edited' } } })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+    expect(queryClient.getQueryData(workflowQueryKey('/p', 'global', 'edit'))).toEqual(savedDoc)
+  })
+
+  test('drops the old per-workflow cache entry on rename', async () => {
+    useCwdStore.getState().addCwd('proj', '/p')
+
+    const savedDoc = {
+      name: 'renamed',
+      path: '/global/workflows/renamed.json',
+      scope: 'global' as const,
+      workflow: { id: 'edited' },
+    }
+    server.use(http.put(`${BASE}/workflows/:name`, () => HttpResponse.json(savedDoc)))
+
+    const queryClient = makeQueryClient()
+    queryClient.setQueryData(workflowQueryKey('/p', 'global', 'old'), {
+      name: 'old',
+      path: '/global/workflows/old.json',
+      scope: 'global',
+      workflow: { id: 'stale' },
+    })
+
+    const { result } = renderHook(() => useUpdateWorkflow(), {
+      wrapper: makeHookWrapper(queryClient),
+    })
+
+    result.current.mutate({
+      scope: 'global',
+      name: 'old',
+      body: { name: 'renamed', workflow: { id: 'edited' } },
+    })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+    // New name holds the fresh doc; the obsolete old-name entry is gone.
+    expect(queryClient.getQueryData(workflowQueryKey('/p', 'global', 'renamed'))).toEqual(savedDoc)
+    expect(queryClient.getQueryData(workflowQueryKey('/p', 'global', 'old'))).toBeUndefined()
+  })
 })
 
 // ── Delete mutation ───────────────────────────────────────────────────────────

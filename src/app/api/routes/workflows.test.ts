@@ -315,6 +315,63 @@ describe("GET /workflows — combined scope tagging", () => {
     }
   });
 
+  it("project dir is a file (ENOTDIR) but globals exist → 200 global-only list", async () => {
+    const { cwd, cleanup } = makeTempCwd();
+    try {
+      // <cwd>/workflows is a regular file (ENOTDIR when read as a directory).
+      writeFileSync(join(cwd, "workflows"), "not a directory");
+      writeGlobalWorkflow("g.json");
+
+      const app = createApiApp(makePartialRm());
+      const res = await app.request(`/workflows?cwd=${encodeURIComponent(cwd)}`);
+      expect(res.status).toBe(200);
+      const body = await res.json() as { workflows: { name: string; scope: string }[] };
+      expect(body.workflows).toHaveLength(1);
+      expect(body.workflows[0]!.name).toBe("g.json");
+      expect(body.workflows[0]!.scope).toBe("global");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("project dir is unreadable (EACCES) but globals exist → 200 global-only list", async () => {
+    if (process.getuid?.() === 0) return; // root bypasses permission checks
+    const { cwd, cleanup } = makeTempCwd();
+    try {
+      const workflowsDir = join(cwd, "workflows");
+      mkdirSync(workflowsDir);
+      chmodSync(workflowsDir, 0o000);
+      writeGlobalWorkflow("g.json");
+
+      const app = createApiApp(makePartialRm());
+      const res = await app.request(`/workflows?cwd=${encodeURIComponent(cwd)}`);
+      expect(res.status).toBe(200);
+      const body = await res.json() as { workflows: { name: string; scope: string }[] };
+      expect(body.workflows).toHaveLength(1);
+      expect(body.workflows[0]!.name).toBe("g.json");
+      expect(body.workflows[0]!.scope).toBe("global");
+    } finally {
+      try { chmodSync(join(cwd, "workflows"), 0o755); } catch { /* ignore */ }
+      await cleanup();
+    }
+  });
+
+  it("project dir is a file (ENOTDIR) and no globals → 400 INVALID_CWD (no recourse)", async () => {
+    const { cwd, cleanup } = makeTempCwd();
+    try {
+      writeFileSync(join(cwd, "workflows"), "not a directory");
+      // No global workflows written: globalWorkflowsDir is empty.
+
+      const app = createApiApp(makePartialRm());
+      const res = await app.request(`/workflows?cwd=${encodeURIComponent(cwd)}`);
+      expect(res.status).toBe(400);
+      const body = await res.json() as Record<string, unknown>;
+      expect(body.code).toBe("INVALID_CWD");
+    } finally {
+      await cleanup();
+    }
+  });
+
   it("a global and project workflow sharing a name appear as two scoped items", async () => {
     const { cwd, cleanup } = makeTempCwd();
     try {

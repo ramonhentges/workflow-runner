@@ -7,9 +7,11 @@ import { WorkflowConfigError } from "../../../domain/workflow.js";
 export function createRunStartHandler(rm: RunManager): RpcHandler<"run.start"> {
   return async (params) => {
     try {
-      return await rm.startRun(params.workflowPath, params.cwd);
+      return await rm.startRun(params.workflowPath, params.cwd, params.branch);
     } catch (e) {
       if (e instanceof RunManagerError) {
+        // Carries the RpcErrorCode for its name, so isolation failures
+        // (NOT_A_GIT_REPO, WORKTREE_CONFLICT) map through here unchanged.
         throw new RpcError(e.code, e.message, e.data);
       }
       if (e instanceof WorkflowConfigError) {

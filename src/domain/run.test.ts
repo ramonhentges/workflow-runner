@@ -56,6 +56,53 @@ describe("Run", () => {
     expect(snapshot.endReason).toBeUndefined();
   });
 
+  it("omits worktreePath and branch when created without them", () => {
+    const snapshot = Run.create(baseArgs).snapshot();
+
+    expect(snapshot.worktreePath).toBeUndefined();
+    expect(snapshot.branch).toBeUndefined();
+    expect("worktreePath" in snapshot).toBe(false);
+    expect("branch" in snapshot).toBe(false);
+  });
+
+  it("emits worktreePath and branch when created with them", () => {
+    const snapshot = Run.create({
+      ...baseArgs,
+      cwd: "/repo",
+      worktreePath: "/repo-feature",
+      branch: "feature/x",
+    }).snapshot();
+
+    expect(snapshot.cwd).toBe("/repo");
+    expect(snapshot.worktreePath).toBe("/repo-feature");
+    expect(snapshot.branch).toBe("feature/x");
+  });
+
+  it("preserves worktreePath and branch across a fromSnapshot round-trip", () => {
+    const original = Run.create({
+      ...baseArgs,
+      cwd: "/repo",
+      worktreePath: "/repo-feature",
+      branch: "feature/x",
+    });
+
+    const restored = Run.fromSnapshot(original.snapshot());
+
+    expect(restored.snapshot()).toEqual(original.snapshot());
+    expect(restored.snapshot().worktreePath).toBe("/repo-feature");
+    expect(restored.snapshot().branch).toBe("feature/x");
+  });
+
+  it("keeps worktreePath and branch absent across a round-trip when unset", () => {
+    const original = Run.create(baseArgs);
+
+    const restored = Run.fromSnapshot(original.snapshot());
+    const snapshot = restored.snapshot();
+
+    expect("worktreePath" in snapshot).toBe(false);
+    expect("branch" in snapshot).toBe(false);
+  });
+
   it("round-trips through snapshot and fromSnapshot", () => {
     const original = Run.create(baseArgs);
     original.markStepEntered(asStepId("step-1"), "prompt-A");

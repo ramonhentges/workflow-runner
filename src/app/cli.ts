@@ -6,6 +6,7 @@ export type ParseResult<T> =
 export interface StartArgs {
   workflowPath: string;
   detach: boolean;
+  branch?: string;
 }
 
 export interface StopArgs {
@@ -37,7 +38,8 @@ export interface DaemonArgs {
 }
 
 export const USAGE = {
-  start: "Usage: workflow-runner start <workflow.json> [--detach|-d]",
+  start:
+    "Usage: workflow-runner start <workflow.json> [--branch <name>] [--detach|-d]",
   stop: "Usage: workflow-runner stop <run-id>",
   retryStep: "Usage: workflow-runner retry-step <run-id>",
   ps: "Usage: workflow-runner ps [--all|-a]",
@@ -62,9 +64,31 @@ export function parseStartArgs(
   if (hasHelp(argv)) return { ok: true, help: true };
   let workflowPath = "";
   let detach = false;
-  for (const arg of argv) {
+  let branch: string | undefined;
+  let i = 0;
+  while (i < argv.length) {
+    const arg = argv[i]!;
     if (arg === "--detach" || arg === "-d") {
       detach = true;
+      i++;
+      continue;
+    }
+    if (arg === "--branch") {
+      const value = argv[i + 1];
+      if (value === undefined || value.startsWith("-")) {
+        return { ok: false, error: "--branch requires a value" };
+      }
+      branch = value;
+      i += 2;
+      continue;
+    }
+    if (arg.startsWith("--branch=")) {
+      const value = arg.slice("--branch=".length);
+      if (value === "") {
+        return { ok: false, error: "--branch requires a value" };
+      }
+      branch = value;
+      i++;
       continue;
     }
     if (arg.startsWith("-")) {
@@ -75,11 +99,14 @@ export function parseStartArgs(
     } else {
       return { ok: false, error: `unexpected argument '${arg}'` };
     }
+    i++;
   }
   if (workflowPath === "") {
     return { ok: false, error: "workflow path is required" };
   }
-  return { ok: true, value: { workflowPath, detach } };
+  const value: StartArgs = { workflowPath, detach };
+  if (branch !== undefined) value.branch = branch;
+  return { ok: true, value };
 }
 
 export function parseStopArgs(argv: readonly string[]): ParseResult<StopArgs> {

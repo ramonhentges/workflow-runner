@@ -15,6 +15,10 @@ export const ERROR_HTTP_STATUS: Record<number, number> = {
   [RpcErrorCode.CWD_INVALID]: 400,
   [RpcErrorCode.WORKFLOW_RUN_ACTIVE]: 409,
   [RpcErrorCode.WORKFLOW_EXISTS]: 409,
+  [RpcErrorCode.NOT_A_GIT_REPO]: 400,
+  [RpcErrorCode.WORKTREE_CONFLICT]: 400,
+  [RpcErrorCode.BRANCH_IN_USE]: 400,
+  [RpcErrorCode.GIT_ISOLATION_FAILED]: 400,
 };
 
 export function httpStatusForError(err: RunManagerError): number {

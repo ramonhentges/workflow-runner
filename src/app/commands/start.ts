@@ -33,7 +33,7 @@ export async function run(argv: string[], deps: StartDeps = {}): Promise<number>
     stdout.write(`${USAGE.start}\n`);
     return 0;
   }
-  const { workflowPath, detach } = parsed.value;
+  const { workflowPath, detach, branch } = parsed.value;
 
   let client: DaemonClient;
   try {
@@ -47,7 +47,11 @@ export async function run(argv: string[], deps: StartDeps = {}): Promise<number>
 
   let startResult: { runId: RunId; slug: string };
   try {
-    startResult = await client.call("run.start", { workflowPath, cwd: process.cwd() });
+    startResult = await client.call("run.start", {
+      workflowPath,
+      cwd: process.cwd(),
+      ...(branch !== undefined ? { branch } : {}),
+    });
   } catch (err) {
     stderr.write(`workflow-runner: ${formatStartError(err)}\n`);
     await client.close();
@@ -75,6 +79,15 @@ function formatStartError(err: unknown): string {
     }
     if (err.code === RpcErrorCode.RUN_LIMIT_REACHED) {
       return `run limit reached: ${err.message}`;
+    }
+    if (err.code === RpcErrorCode.NOT_A_GIT_REPO) {
+      return `not a git repository: ${err.message}`;
+    }
+    if (err.code === RpcErrorCode.WORKTREE_CONFLICT) {
+      return `worktree conflict: ${err.message}`;
+    }
+    if (err.code === RpcErrorCode.BRANCH_IN_USE) {
+      return `branch already checked out: ${err.message}`;
     }
     return mapDaemonError(err, "<workflow>");
   }

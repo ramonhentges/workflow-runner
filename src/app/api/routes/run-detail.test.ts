@@ -191,6 +191,32 @@ describe("GET /runs/:id — unit", () => {
 
     expect(body.cwd).toBeUndefined();
   });
+
+  it("worktreePath/branch are present in RunDetail for an isolated run", async () => {
+    const snap = fakeSnapshot("run007", "iso-hawk", "running", {
+      cwd: "/projects/app",
+      worktreePath: "/projects/app-feature-iso",
+      branch: "feature/iso",
+    });
+    const app = createApiApp(makeRm({ type: "found", snap }));
+
+    const res = await app.request("/runs/run007");
+    const body = await res.json() as Record<string, unknown>;
+
+    expect(body.worktreePath).toBe("/projects/app-feature-iso");
+    expect(body.branch).toBe("feature/iso");
+  });
+
+  it("worktreePath/branch are absent in RunDetail for a non-isolated run", async () => {
+    const snap = fakeSnapshot("run008", "plain-cat", "running", { cwd: "/projects/app" });
+    const app = createApiApp(makeRm({ type: "found", snap }));
+
+    const res = await app.request("/runs/run008");
+    const body = await res.json() as Record<string, unknown>;
+
+    expect(body.worktreePath).toBeUndefined();
+    expect(body.branch).toBeUndefined();
+  });
 });
 
 // ---------------------------------------------------------------------------

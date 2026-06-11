@@ -1,4 +1,8 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { asStepId } from "../../../domain/ids.js";
 import type {
@@ -24,7 +28,7 @@ function makeStep(description: string, mode: Step["mode"] = "autonomous"): Step 
   };
 }
 
-function makeArgs(step: Step): RunnerAgentSessionArgs {
+function makeArgs(step: Step, cwd = "/tmp"): RunnerAgentSessionArgs {
   const tools: RunnerTools = {
     url: "http://0.0.0.0:0",
     beginStep: () => "tok" as never,
@@ -36,7 +40,7 @@ function makeArgs(step: Step): RunnerAgentSessionArgs {
     status: () => {},
     toolCall: () => {},
   };
-  return { step, cwd: "/tmp", tools, inboundMessage: null, sink };
+  return { step, cwd, tools, inboundMessage: null, sink };
 }
 
 describe("parseFakeMarker", () => {
@@ -52,6 +56,24 @@ describe("parseFakeMarker", () => {
     });
     expect(parseFakeMarker("fake:hang")).toEqual({ kind: "hang" });
     expect(parseFakeMarker("fake:interactive")).toEqual({ kind: "interactive" });
+    expect(parseFakeMarker("fake:write shared.txt marker-a")).toEqual({
+      kind: "write",
+      relPath: "shared.txt",
+      content: "marker-a",
+    });
+  });
+
+  test("fake:write content may contain spaces; missing content defaults to empty", () => {
+    expect(parseFakeMarker("fake:write out.txt hello world")).toEqual({
+      kind: "write",
+      relPath: "out.txt",
+      content: "hello world",
+    });
+    expect(parseFakeMarker("fake:write out.txt")).toEqual({
+      kind: "write",
+      relPath: "out.txt",
+      content: "",
+    });
   });
 
   test("defaults to complete for unknown descriptions", () => {
@@ -65,6 +87,21 @@ describe("FixtureSession", () => {
     const s = await factory.create(makeArgs(makeStep("fake:complete")));
     const o = await s.outcome;
     expect(o).toEqual({ kind: "finish", message: "fake complete" });
+  });
+
+  test("fake:write writes content into cwd then resolves with finish", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "wfr-fake-write-"));
+    try {
+      const factory = new FixtureSessionFactory();
+      const s = await factory.create(
+        makeArgs(makeStep("fake:write nested/shared.txt marker-a"), dir),
+      );
+      const o = await s.outcome;
+      expect(o).toEqual({ kind: "finish", message: "fake write" });
+      expect(readFileSync(join(dir, "nested/shared.txt"), "utf8")).toBe("marker-a");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   test("fake:handoff resolves with handoff outcome and parsed next step", async () => {

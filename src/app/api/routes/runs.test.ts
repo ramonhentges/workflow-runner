@@ -215,6 +215,30 @@ describe("GET /runs — unit", () => {
     expect(body.runs[0].cwd).toBeUndefined();
   });
 
+  it("worktreePath/branch are present in run summary for an isolated run", async () => {
+    const snap = fakeSnapshot("run001", "brave-otter", "running", {
+      cwd: "/projects/app",
+      worktreePath: "/projects/app-feature-iso",
+      branch: "feature/iso",
+    });
+    const app = createApiApp(makeRm([snap]));
+    const res = await app.request("/runs");
+    const body = await res.json() as { runs: Record<string, unknown>[] };
+
+    expect(body.runs[0].worktreePath).toBe("/projects/app-feature-iso");
+    expect(body.runs[0].branch).toBe("feature/iso");
+  });
+
+  it("worktreePath/branch are absent in run summary for a non-isolated run", async () => {
+    const snap = fakeSnapshot("run001", "brave-otter", "running", { cwd: "/projects/app" });
+    const app = createApiApp(makeRm([snap]));
+    const res = await app.request("/runs");
+    const body = await res.json() as { runs: Record<string, unknown>[] };
+
+    expect(body.runs[0].worktreePath).toBeUndefined();
+    expect(body.runs[0].branch).toBeUndefined();
+  });
+
   it("?cwd filter returns only runs matching the given cwd", async () => {
     const snap1 = fakeSnapshot("run001", "brave-otter", "running", { cwd: "/projects/app-a" });
     const snap2 = fakeSnapshot("run002", "cool-fox", "running", { cwd: "/projects/app-b" });

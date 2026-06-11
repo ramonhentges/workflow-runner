@@ -68,6 +68,7 @@ export interface TuiHooks {
 export class Tui {
   #renderer: Renderer;
   #statusText: TextRenderable;
+  #isolationText: TextRenderable;
   #logScroll: ScrollBoxRenderable;
   #inputField: InputRenderable;
   #inputBar: BoxRenderable;
@@ -91,6 +92,7 @@ export class Tui {
   private constructor(init: {
     renderer: Renderer;
     statusText: TextRenderable;
+    isolationText: TextRenderable;
     logScroll: ScrollBoxRenderable;
     inputField: InputRenderable;
     inputBar: BoxRenderable;
@@ -99,6 +101,7 @@ export class Tui {
   }) {
     this.#renderer = init.renderer;
     this.#statusText = init.statusText;
+    this.#isolationText = init.isolationText;
     this.#logScroll = init.logScroll;
     this.#inputField = init.inputField;
     this.#inputBar = init.inputBar;
@@ -120,6 +123,15 @@ export class Tui {
       id: "status",
       content: "● Initializing...",
       fg: C.orange,
+    });
+
+    // Isolation segment (ADR-004): branch/worktree of an isolated run, shown
+    // beside the status in the header. Empty until `setIsolation` populates it,
+    // so non-isolated runs render an unchanged single-status header.
+    const isolationText = new TextRenderable(renderer, {
+      id: "isolation",
+      content: "",
+      fg: C.dim,
     });
 
     const logScroll = new ScrollBoxRenderable(renderer, {
@@ -150,6 +162,7 @@ export class Tui {
       paddingRight: 1,
     });
     header.add(statusText);
+    header.add(isolationText);
 
     const logWrapper = new BoxRenderable(renderer, {
       id: "log-wrapper",
@@ -189,6 +202,7 @@ export class Tui {
     return new Tui({
       renderer,
       statusText,
+      isolationText,
       logScroll,
       inputField,
       inputBar,
@@ -470,6 +484,20 @@ export class Tui {
       this.#clock.clearInterval(this.#spinnerInterval);
       this.#spinnerInterval = null;
     }
+  }
+
+  /**
+   * Surface an isolated run's branch/worktree in the header (ADR-004). Mirrors
+   * the `ps` continuation line (`formatIsolationLine`) for cross-CLI
+   * consistency. When neither field is present (a non-isolated run) the segment
+   * is cleared, leaving the header visually unchanged.
+   */
+  setIsolation(info: { branch?: string; worktreePath?: string }): void {
+    const parts: string[] = [];
+    if (info.branch) parts.push(`branch ${info.branch}`);
+    if (info.worktreePath) parts.push(`worktree ${info.worktreePath}`);
+    this.#isolationText.content =
+      parts.length > 0 ? `  ↳ ${parts.join("  ")}` : "";
   }
 
   private setStatus(text: string, color?: string): void {

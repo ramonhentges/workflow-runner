@@ -171,6 +171,51 @@ describe("formatPsTable", () => {
     const rows = [makeRow()];
     expect(formatPsTable(rows, 1_192_000)).toBe(formatPsTable(rows, 1_192_000));
   });
+
+  it("renders a branch/worktree continuation line for an isolated run", () => {
+    const out = formatPsTable(
+      [
+        makeRow({
+          branch: "feature-x",
+          worktreePath: "/repos/myapp-feature-x",
+        }),
+      ],
+      1_192_000,
+    );
+    const lines = out.split("\n");
+    // header + row + continuation line
+    expect(lines).toHaveLength(3);
+    expect(lines[1]).toContain("brave-otter");
+    // The branch/worktree do not become new columns on the primary row.
+    expect(lines[1]).not.toContain("feature-x");
+    expect(lines[2]).toContain("feature-x");
+    expect(lines[2]).toContain("/repos/myapp-feature-x");
+  });
+
+  it("leaves a non-isolated row unchanged (no continuation line)", () => {
+    const isolated = makeRow({
+      id: asRunId("aaaaaaaa"),
+      slug: asRunSlug("iso-otter"),
+      status: "running",
+      startedAt: 900_000,
+      branch: "feature-x",
+      worktreePath: "/repos/myapp-feature-x",
+    });
+    const plain = makeRow({
+      id: asRunId("bbbbbbbb"),
+      slug: asRunSlug("plain-fox"),
+      status: "running",
+      startedAt: 500_000,
+    });
+    const out = formatPsTable([isolated, plain], 1_500_000);
+    const lines = out.split("\n");
+    // header + isolated row + its continuation line + plain row (no continuation)
+    expect(lines).toHaveLength(4);
+    expect(lines[1]).toContain("iso-otter");
+    expect(lines[2]).toContain("feature-x");
+    expect(lines[3]).toContain("plain-fox");
+    expect(lines[3]).not.toContain("↳");
+  });
 });
 
 function okReport(): DoctorReport {

@@ -20,6 +20,8 @@ export function createRunPsHandler(rm: RunManager): RpcHandler<"run.ps"> {
         id: snap.id,
         slug: snap.slug,
         workflowPath: snap.workflowPath,
+        worktreePath: snap.worktreePath,
+        branch: snap.branch,
         currentStepId: snap.currentStepId,
         status: snap.status,
         startedAt: snap.startedAt,

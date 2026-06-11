@@ -314,7 +314,34 @@ describe('WorkflowList delete flow', () => {
 })
 
 describe('WorkflowList run flow', () => {
-  test('clicking Run starts a run for the row and navigates to the run view', async () => {
+  test('clicking Run opens the run dialog instead of starting immediately', async () => {
+    const user = userEvent.setup()
+    useCwdStore.getState().addCwd('proj', '/p')
+    let startCalled = false
+
+    server.use(
+      http.get(`${BASE}/workflows`, () =>
+        HttpResponse.json({
+          workflows: [{ name: 'alpha.json', path: '/p/workflows/alpha.json' }],
+        }),
+      ),
+      http.post(`${BASE}/runs`, () => {
+        startCalled = true
+        return HttpResponse.json({ runId: 'run-123', slug: 'alpha-run' })
+      }),
+    )
+
+    renderWorkflowList()
+
+    const row = await screen.findByTestId('workflow-row-alpha')
+    await user.click(within(row).getByRole('button', { name: 'Run' }))
+
+    const dialog = await screen.findByTestId('run-dialog')
+    expect(within(dialog).getByLabelText(/branch/i)).toBeInTheDocument()
+    expect(startCalled).toBe(false)
+  })
+
+  test('submitting the dialog with a blank branch starts a non-isolated run and navigates', async () => {
     const user = userEvent.setup()
     useCwdStore.getState().addCwd('proj', '/p')
     let startBody: unknown = null
@@ -335,13 +362,50 @@ describe('WorkflowList run flow', () => {
 
     const row = await screen.findByTestId('workflow-row-alpha')
     await user.click(within(row).getByRole('button', { name: 'Run' }))
+    const dialog = await screen.findByTestId('run-dialog')
+    await user.click(within(dialog).getByRole('button', { name: 'Start run' }))
 
     await screen.findByTestId('run-page')
+    // Blank branch ⇒ no `branch` key ⇒ byte-for-byte identical to the old
+    // inline-start request body.
     expect(startBody).toEqual({ workflowPath: '/p/workflows/alpha.json', cwd: '/p' })
     expect(router.state.location.pathname).toBe('/runs/run-123')
   })
 
-  test('a failed start shows an error banner and keeps the row', async () => {
+  test('a non-empty branch is forwarded (trimmed) to startRun as an isolation request', async () => {
+    const user = userEvent.setup()
+    useCwdStore.getState().addCwd('proj', '/p')
+    let startBody: unknown = null
+
+    server.use(
+      http.get(`${BASE}/workflows`, () =>
+        HttpResponse.json({
+          workflows: [{ name: 'alpha.json', path: '/p/workflows/alpha.json' }],
+        }),
+      ),
+      http.post(`${BASE}/runs`, async ({ request }) => {
+        startBody = await request.json()
+        return HttpResponse.json({ runId: 'run-9', slug: 'alpha-run' })
+      }),
+    )
+
+    renderWorkflowList()
+
+    const row = await screen.findByTestId('workflow-row-alpha')
+    await user.click(within(row).getByRole('button', { name: 'Run' }))
+    const dialog = await screen.findByTestId('run-dialog')
+    await user.type(within(dialog).getByLabelText(/branch/i), '  feature/iso  ')
+    await user.click(within(dialog).getByRole('button', { name: 'Start run' }))
+
+    await screen.findByTestId('run-page')
+    expect(startBody).toEqual({
+      workflowPath: '/p/workflows/alpha.json',
+      cwd: '/p',
+      branch: 'feature/iso',
+    })
+  })
+
+  test('a failed start shows an error in the dialog and keeps the row', async () => {
     const user = userEvent.setup()
     useCwdStore.getState().addCwd('proj', '/p')
 
@@ -360,6 +424,8 @@ describe('WorkflowList run flow', () => {
 
     const row = await screen.findByTestId('workflow-row-alpha')
     await user.click(within(row).getByRole('button', { name: 'Run' }))
+    const dialog = await screen.findByTestId('run-dialog')
+    await user.click(within(dialog).getByRole('button', { name: 'Start run' }))
 
     expect(await screen.findByTestId('start-error')).toBeInTheDocument()
     expect(screen.getByTestId('workflow-row-alpha')).toBeInTheDocument()
@@ -517,17 +583,18 @@ describe('WorkflowList scope badges', () => {
     expect(within(globalRow).queryByRole('button', { name: 'Confirm' })).not.toBeInTheDocument()
   })
 
-  test('starting a run on one of two same-named rows shows "Starting…" only on that row', async () => {
+  test('opening the run dialog from one of two same-named rows starts that row\'s workflow', async () => {
     const user = userEvent.setup()
     useCwdStore.getState().addCwd('proj', '/p')
     const workflows: WorkflowItem[] = [
       { name: 'deploy.json', path: '/p/workflows/deploy.json', scope: 'project' },
       { name: 'deploy.json', path: '/global/workflows/deploy.json', scope: 'global' },
     ]
+    let startBody: unknown = null
     server.use(
       http.get(`${BASE}/workflows`, () => HttpResponse.json({ workflows })),
-      http.post(`${BASE}/runs`, async () => {
-        await delay('infinite')
+      http.post(`${BASE}/runs`, async ({ request }) => {
+        startBody = await request.json()
         return HttpResponse.json({ runId: 'run-1', slug: 'deploy-run' })
       }),
     )
@@ -539,15 +606,16 @@ describe('WorkflowList scope badges', () => {
     const projectRow = rows.find(
       row => within(row).getByTestId('workflow-scope-badge').dataset.scope === 'project',
     )!
-    const globalRow = rows.find(
-      row => within(row).getByTestId('workflow-scope-badge').dataset.scope === 'global',
-    )!
 
+    // Opening the dialog from the project row and starting must forward the
+    // project workflow's path, not the same-named global one.
     await user.click(within(projectRow).getByRole('button', { name: 'Run' }))
+    const dialog = await screen.findByTestId('run-dialog')
+    await user.click(within(dialog).getByRole('button', { name: 'Start run' }))
 
-    expect(await within(projectRow).findByRole('button', { name: 'Starting…' })).toBeInTheDocument()
-    expect(within(globalRow).getByRole('button', { name: 'Run' })).toBeInTheDocument()
-    expect(within(globalRow).queryByRole('button', { name: 'Starting…' })).not.toBeInTheDocument()
+    await waitFor(() =>
+      expect(startBody).toEqual({ workflowPath: '/p/workflows/deploy.json', cwd: '/p' }),
+    )
   })
 })
 

@@ -194,6 +194,10 @@ const RunDetailSchema = z.object({
   slug: z.string(),
   workflowPath: z.string(),
   cwd: z.string().optional(),
+  // Present only for isolated runs (ADR-004); kept here so the snapshot frame
+  // carries them through to the run-detail view (z.object strips unknown keys).
+  worktreePath: z.string().optional(),
+  branch: z.string().optional(),
   status: RunStatusSchema,
   currentStepId: z.string().nullable(),
   visitedStepIds: z.array(z.string()),

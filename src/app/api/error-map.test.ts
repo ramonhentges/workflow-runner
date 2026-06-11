@@ -37,6 +37,27 @@ describe("mapError RunManagerError", () => {
     expect(result.status).toBe(400);
     expect(result.code).toBe("CWD_INVALID");
   });
+
+  it("maps NOT_A_GIT_REPO to status 400 with code NOT_A_GIT_REPO", () => {
+    const err = new RunManagerError("NOT_A_GIT_REPO", "cwd is not a git repo");
+    const result = mapError(err);
+    expect(result.status).toBe(400);
+    expect(result.code).toBe("NOT_A_GIT_REPO");
+  });
+
+  it("maps WORKTREE_CONFLICT to status 400 with code WORKTREE_CONFLICT", () => {
+    const err = new RunManagerError("WORKTREE_CONFLICT", "worktree path is occupied");
+    const result = mapError(err);
+    expect(result.status).toBe(400);
+    expect(result.code).toBe("WORKTREE_CONFLICT");
+  });
+
+  it("maps BRANCH_IN_USE to status 400 with code BRANCH_IN_USE", () => {
+    const err = new RunManagerError("BRANCH_IN_USE", "branch is checked out elsewhere");
+    const result = mapError(err);
+    expect(result.status).toBe(400);
+    expect(result.code).toBe("BRANCH_IN_USE");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -50,6 +71,18 @@ describe("ERROR_HTTP_STATUS new entries", () => {
 
   it("maps WORKFLOW_EXISTS numeric code to 409", () => {
     expect(ERROR_HTTP_STATUS[RpcErrorCode.WORKFLOW_EXISTS]).toBe(409);
+  });
+
+  it("maps NOT_A_GIT_REPO numeric code to 400", () => {
+    expect(ERROR_HTTP_STATUS[RpcErrorCode.NOT_A_GIT_REPO]).toBe(400);
+  });
+
+  it("maps WORKTREE_CONFLICT numeric code to 400", () => {
+    expect(ERROR_HTTP_STATUS[RpcErrorCode.WORKTREE_CONFLICT]).toBe(400);
+  });
+
+  it("maps BRANCH_IN_USE numeric code to 400", () => {
+    expect(ERROR_HTTP_STATUS[RpcErrorCode.BRANCH_IN_USE]).toBe(400);
   });
 });
 

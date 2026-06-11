@@ -1,5 +1,6 @@
 import { statSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import { rm } from "node:fs/promises";
+import { basename, dirname, isAbsolute, join } from "node:path";
 import {
   Run,
   type RunId,
@@ -18,6 +19,11 @@ import {
 import type { StepId } from "../../domain/ids.js";
 import { Workflow } from "../../domain/workflow.js";
 import { McpServer } from "../mcp/mcp-server.js";
+import {
+  GitWorktreeError,
+  SimpleGitWorktrees,
+  type GitWorktrees,
+} from "../git/git-worktrees.js";
 import { RunStore } from "./run-store.js";
 import { EventLog, type EventLogEntry } from "./event-log.js";
 import { RpcErrorCode } from "./protocol.js";
@@ -66,8 +72,36 @@ export interface RunManagerOptions {
   generateSlug?: () => RunSlug;
   /** Injected for testing: override MCP server creation. */
   createMcpServer?: () => Promise<McpServer>;
+  /** Injected for testing: override git worktree operations (defaults to the real adapter). */
+  gitWorktrees?: GitWorktrees;
   /** Optional logger for recording errors and events. */
   logger?: DaemonLogger | null;
+}
+
+/**
+ * Sanitize a branch name into a single filesystem-safe directory segment.
+ * Path separators, whitespace, and other unsafe characters collapse to `-`
+ * (ADR-003), and leading/trailing dashes are trimmed.
+ */
+function sanitizeBranch(branch: string): string {
+  return branch.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+}
+
+/**
+ * Wrap a git read failure during isolation pre-validation in a stable, mapped
+ * RunManagerError. `resolveRepoRoot` has already proven the directory is in a
+ * git repo, so a failure reading the worktree list or branch list (a locked or
+ * corrupt index, a transient git invocation error, an unreadable worktree list)
+ * is a genuine isolation failure — not a "not a git repo" — and must surface as
+ * GIT_ISOLATION_FAILED instead of escaping startRun as a raw simple-git error
+ * that mapError would turn into an opaque, undeclared HTTP 500.
+ */
+function isolationReadError(branch: string, err: unknown): RunManagerError {
+  const detail = err instanceof Error ? err.message : String(err);
+  return new RunManagerError(
+    "GIT_ISOLATION_FAILED",
+    `Failed to inspect git state for branch '${branch}': ${detail}`,
+  );
 }
 
 export class RunManager {
@@ -78,6 +112,7 @@ export class RunManager {
   readonly #generateId: () => RunId;
   readonly #generateSlug: () => RunSlug;
   readonly #createMcpServer: () => Promise<McpServer>;
+  readonly #gitWorktrees: GitWorktrees;
   readonly #logger: DaemonLogger | null;
 
   constructor(
@@ -91,6 +126,7 @@ export class RunManager {
     this.#generateId = options.generateId ?? generateRunId;
     this.#generateSlug = options.generateSlug ?? generateSlug;
     this.#createMcpServer = options.createMcpServer ?? McpServer.start.bind(McpServer);
+    this.#gitWorktrees = options.gitWorktrees ?? new SimpleGitWorktrees();
     this.#logger = options.logger ?? null;
   }
 
@@ -113,7 +149,11 @@ export class RunManager {
     }
   }
 
-  async startRun(workflowPath: string, cwd: string): Promise<{ runId: RunId; slug: RunSlug }> {
+  async startRun(
+    workflowPath: string,
+    cwd: string,
+    branch?: string,
+  ): Promise<{ runId: RunId; slug: RunSlug }> {
     if (!isAbsolute(cwd)) {
       throw new RunManagerError("CWD_INVALID", `cwd must be an absolute path: ${cwd}`);
     }
@@ -134,6 +174,51 @@ export class RunManager {
       );
     }
 
+    // Pure (non-mutating) worktree resolution happens before the slot is
+    // reserved so a non-repo / validation failure leaves no orphaned run state.
+    // The mutating addWorktree is deferred to the slot-reservation try below.
+    let worktreePath: string | undefined;
+    let pendingWorktree: {
+      repoRoot: string;
+      worktreePath: string;
+      branch: string;
+      createBranch: boolean;
+    } | null = null;
+    if (branch !== undefined) {
+      const repoRoot = await this.#gitWorktrees.resolveRepoRoot(cwd);
+      if (repoRoot === null) {
+        throw new RunManagerError("NOT_A_GIT_REPO", `cwd is not in a git repository: ${cwd}`);
+      }
+      let existing: string | null;
+      try {
+        existing = await this.#gitWorktrees.findWorktreeForBranch(repoRoot, branch);
+      } catch (err) {
+        throw isolationReadError(branch, err);
+      }
+      if (existing !== null) {
+        // Reuse the worktree already checked out on this branch (ADR-005).
+        worktreePath = existing;
+      } else {
+        const sibling = join(
+          dirname(repoRoot),
+          `${basename(repoRoot)}-${sanitizeBranch(branch)}`,
+        );
+        let exists: boolean;
+        try {
+          exists = await this.#gitWorktrees.branchExists(repoRoot, branch);
+        } catch (err) {
+          throw isolationReadError(branch, err);
+        }
+        pendingWorktree = {
+          repoRoot,
+          worktreePath: sibling,
+          branch,
+          createBranch: !exists,
+        };
+        worktreePath = sibling;
+      }
+    }
+
     const workflow = await Workflow.load(workflowPath);
 
     let runId: RunId;
@@ -151,7 +236,7 @@ export class RunManager {
       return s.id === runId || s.slug === slug;
     }));
 
-    const run = Run.create({ id: runId, slug, workflowPath, cwd });
+    const run = Run.create({ id: runId, slug, workflowPath, cwd, worktreePath, branch });
     const runDir = join(this.#store.runsRoot, runId);
 
     // Reserve the slot synchronously before any I/O so a concurrent startRun
@@ -173,13 +258,41 @@ export class RunManager {
       await this.#store.persist(run.snapshot());
       record.eventLog = await EventLog.open(runDir);
       record.mcpServer = await this.#createMcpServer();
+      // addWorktree mutates the filesystem and is the last fallible step before
+      // the runner is constructed, so a provisioning failure is the only late
+      // failure handled by this registry-cleanup catch.
+      if (pendingWorktree) {
+        await this.#gitWorktrees.addWorktree(pendingWorktree);
+      }
     } catch (err) {
       this.#registry.delete(runId);
+      // Roll back the resources opened earlier in this try block. A late failure
+      // (addWorktree) must not leak the MCP HTTP server's port or the event-log
+      // file descriptor, and must not leave an orphaned snapshot behind that
+      // discoverOnStartup would later resurrect as a phantom run. Close the FD
+      // before removing the run dir it lives in.
+      if (record.mcpServer) {
+        await record.mcpServer.close().catch(() => {});
+        record.mcpServer = null;
+      }
+      if (record.eventLog) {
+        await record.eventLog.close().catch(() => {});
+        record.eventLog = null;
+      }
+      await rm(runDir, { recursive: true, force: true }).catch(() => {});
+      if (err instanceof GitWorktreeError) {
+        // A non-worktree directory occupying the computed path
+        // (PATH_EXISTS) and the branch already being checked out in another
+        // worktree (BRANCH_IN_USE, reachable via a TOCTOU race) are distinct,
+        // separately actionable conditions, so each gets its own stable code.
+        const code = err.code === "PATH_EXISTS" ? "WORKTREE_CONFLICT" : "BRANCH_IN_USE";
+        throw new RunManagerError(code, err.message);
+      }
       throw err;
     }
 
     const runner = new Runner(workflow, this.#sessionFactory, record.mcpServer!, {
-      cwd,
+      cwd: worktreePath ?? cwd,
       onStepBoundary: async (visited, nextStepId, nextInboundMessage) => {
         if (nextStepId !== null) {
           run.markStepEntered(nextStepId, nextInboundMessage ?? "");
@@ -280,6 +393,8 @@ export class RunManager {
       slug: snap.slug,
       workflowPath: snap.workflowPath,
       cwd: snap.cwd,
+      worktreePath: snap.worktreePath,
+      branch: snap.branch,
       status: "running",
       currentStepId: snap.currentStepId,
       visitedStepIds: [...snap.visitedStepIds],
@@ -300,6 +415,7 @@ export class RunManager {
     record.mcpServer = mcpServer;
 
     const runner = new Runner(workflow, this.#sessionFactory, mcpServer, {
+      cwd: snap.worktreePath ?? snap.cwd,
       onStepBoundary: async (visited, nextStepId, nextInboundMessage) => {
         if (nextStepId !== null) {
           newRun.markStepEntered(nextStepId, nextInboundMessage ?? "");

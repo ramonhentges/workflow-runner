@@ -20,11 +20,14 @@ export const RunEventSchema = z.object({
 export type RunEvent = z.infer<typeof RunEventSchema>;
 
 // List-row shape; mirrors RunListEntry from protocol.ts.
+// `worktreePath`/`branch` are present only for isolated runs (ADR-004).
 export const RunSummarySchema = z.object({
   id: z.string(),
   slug: z.string(),
   workflowPath: z.string(),
   cwd: z.string().optional(),
+  worktreePath: z.string().optional(),
+  branch: z.string().optional(),
   currentStepId: z.string().nullable(),
   status: RunStatusSchema,
   startedAt: z.number(),
@@ -34,11 +37,14 @@ export const RunSummarySchema = z.object({
 export type RunSummary = z.infer<typeof RunSummarySchema>;
 
 // Detail shape; RunSnapshot listed fields + attachedCount.
+// `worktreePath`/`branch` are present only for isolated runs (ADR-004).
 export const RunDetailSchema = z.object({
   id: z.string(),
   slug: z.string(),
   workflowPath: z.string(),
   cwd: z.string().optional(),
+  worktreePath: z.string().optional(),
+  branch: z.string().optional(),
   status: RunStatusSchema,
   currentStepId: z.string().nullable(),
   visitedStepIds: z.array(z.string()),
@@ -83,9 +89,14 @@ export const ClientFrameSchema = z.discriminatedUnion("type", [
 ]);
 export type ClientFrame = z.infer<typeof ClientFrameSchema>;
 
+// `branch` is optional; when present it requests an isolated worktree run and
+// must be non-empty (ADR-001). The value is trimmed first, so a whitespace-only
+// branch (e.g. `" "`) is rejected rather than flowing into git/worktree paths as
+// a degenerate ref. Omitting it leaves behavior unchanged.
 export const StartRunRequestSchema = z.object({
   workflowPath: z.string().min(1),
   cwd: z.string().min(1),
+  branch: z.string().trim().min(1).optional(),
 });
 export type StartRunRequest = z.infer<typeof StartRunRequestSchema>;
 

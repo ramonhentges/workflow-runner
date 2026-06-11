@@ -5,6 +5,17 @@ import { Copy, Edit, Play, Plus, Trash2, X } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
   Table,
@@ -41,7 +52,11 @@ export function WorkflowList() {
   const navigate = useNavigate()
   const [confirmingKey, setConfirmingKey] = useState<string | null>(null)
   const [deleteError, setDeleteError] = useState('')
-  const [startingKey, setStartingKey] = useState<string | null>(null)
+  // The run dialog is a single controlled instance keyed by the workflow it was
+  // opened for; `null` means closed. This is the list's isolation entry point
+  // (PRD Core Feature #1), mirroring StartRunForm's branch field.
+  const [runDialogWorkflow, setRunDialogWorkflow] = useState<WorkflowItem | null>(null)
+  const [branch, setBranch] = useState('')
   const [startError, setStartError] = useState('')
   const { data, isLoading, isError } = useWorkflowList()
   const workflows = data?.workflows ?? []
@@ -52,19 +67,28 @@ export function WorkflowList() {
   const deleteMutation = useDeleteWorkflow()
 
   const startMutation = useMutation({
-    mutationFn: (workflow: WorkflowItem) => {
+    mutationFn: ({ workflow, branch }: { workflow: WorkflowItem; branch: string }) => {
       if (!activeCwd) throw new Error('No active working directory selected.')
-      return startRun({ workflowPath: workflow.path, cwd: activeCwd.path })
+      // A non-empty branch opts the run into git-worktree isolation (ADR-001);
+      // leaving it blank starts a normal run in the active cwd. Same request
+      // shaping as StartRunForm so the non-isolated path is byte-for-byte
+      // identical.
+      const trimmedBranch = branch.trim()
+      return startRun({
+        workflowPath: workflow.path,
+        cwd: activeCwd.path,
+        ...(trimmedBranch ? { branch: trimmedBranch } : {}),
+      })
     },
     onMutate: () => {
       setStartError('')
     },
     onSuccess: async data => {
+      setRunDialogWorkflow(null)
       await queryClient.invalidateQueries({ queryKey: ['runs'] })
       await navigate({ to: '/runs/$runId', params: { runId: data.runId } })
     },
     onError: error => {
-      setStartingKey(null)
       setStartError(error instanceof Error ? error.message : 'Failed to start run.')
     },
   })
@@ -124,16 +148,6 @@ export function WorkflowList() {
         </div>
       )}
 
-      {startError && (
-        <div
-          data-testid="start-error"
-          role="alert"
-          className="rounded border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
-        >
-          {startError}
-        </div>
-      )}
-
       {!isLoading && !isError && workflows.length === 0 && (
         <div
           data-testid="no-workflows-state"
@@ -177,7 +191,6 @@ export function WorkflowList() {
                 const rowKey = `${workflow.scope}-${bareName}`
                 const isConfirming = confirmingKey === rowKey
                 const isDeleting = deleteMutation.isPending && isConfirming
-                const isStarting = startMutation.isPending && startingKey === rowKey
 
                 return (
                   <TableRow
@@ -202,14 +215,14 @@ export function WorkflowList() {
                         <Button
                           type="button"
                           size="sm"
-                          disabled={isStarting}
                           onClick={() => {
-                            setStartingKey(rowKey)
-                            startMutation.mutate(workflow)
+                            setBranch('')
+                            setStartError('')
+                            setRunDialogWorkflow(workflow)
                           }}
                         >
                           <Play className="size-4" aria-hidden="true" />
-                          {isStarting ? 'Starting…' : 'Run'}
+                          Run
                         </Button>
                         <Button asChild variant="outline" size="sm">
                           <Link
@@ -285,6 +298,72 @@ export function WorkflowList() {
           </Table>
         </Card>
       )}
+
+      <Dialog
+        open={runDialogWorkflow !== null}
+        onOpenChange={open => {
+          if (!open) {
+            setRunDialogWorkflow(null)
+            setBranch('')
+            setStartError('')
+          }
+        }}
+      >
+        <DialogContent data-testid="run-dialog">
+          <DialogHeader>
+            <DialogTitle>
+              Run {runDialogWorkflow ? workflowDisplayName(runDialogWorkflow) : ''}
+            </DialogTitle>
+            <DialogDescription>
+              Optionally run in an isolated git worktree on a branch.
+            </DialogDescription>
+          </DialogHeader>
+          <form
+            className="flex flex-col gap-4"
+            onSubmit={e => {
+              e.preventDefault()
+              if (runDialogWorkflow) {
+                startMutation.mutate({ workflow: runDialogWorkflow, branch })
+              }
+            }}
+          >
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="run-branch-input">Branch (optional)</Label>
+              <Input
+                id="run-branch-input"
+                value={branch}
+                onChange={e => {
+                  setBranch(e.target.value)
+                  setStartError('')
+                }}
+                placeholder="feature/my-branch"
+              />
+              <p className="text-xs text-muted-foreground">
+                Run in an isolated git worktree on this branch. Leave blank to run in the working
+                directory.
+              </p>
+            </div>
+
+            {startError && (
+              <p data-testid="start-error" role="alert" className="text-sm text-destructive">
+                {startError}
+              </p>
+            )}
+
+            <DialogFooter>
+              <DialogClose asChild>
+                <Button type="button" variant="outline">
+                  Cancel
+                </Button>
+              </DialogClose>
+              <Button type="submit" disabled={startMutation.isPending}>
+                <Play className="size-4" aria-hidden="true" />
+                {startMutation.isPending ? 'Starting…' : 'Start run'}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

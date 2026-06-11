@@ -1,8 +1,9 @@
 import { describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, realpathSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 import { createApiApp } from "../app.js";
 import { RunManager, RunManagerError } from "../../../infra/daemon/run-manager.js";
@@ -14,7 +15,7 @@ import { asRunId, asRunSlug } from "../../../domain/run.js";
 // Helpers
 // ---------------------------------------------------------------------------
 
-type StartRunFn = (workflowPath: string, cwd: string) => Promise<{ runId: ReturnType<typeof asRunId>; slug: ReturnType<typeof asRunSlug> }>;
+type StartRunFn = (workflowPath: string, cwd: string, branch?: string) => Promise<{ runId: ReturnType<typeof asRunId>; slug: ReturnType<typeof asRunSlug> }>;
 
 function makeRm(startRunImpl: StartRunFn): RunManager {
   return {
@@ -87,6 +88,59 @@ describe("POST /runs — unit", () => {
 
     expect(capturedWorkflowPath).toBe("/workspace/workflow.json");
     expect(capturedCwd).toBe("/workspace/myproject");
+  });
+
+  it("forwards the branch from the body to startRun", async () => {
+    let capturedBranch: string | undefined = "UNSET";
+
+    const rm = makeRm(async (_wp: string, _c: string, b?: string) => {
+      capturedBranch = b;
+      return { runId: asRunId("run001"), slug: asRunSlug("brave-otter") };
+    });
+
+    const app = createApiApp(rm);
+    await postRuns(app, {
+      workflowPath: "/workspace/workflow.json",
+      cwd: "/workspace/myproject",
+      branch: "feature/iso",
+    });
+
+    expect(capturedBranch).toBe("feature/iso");
+  });
+
+  it("forwards undefined branch when the body omits it (behavior unchanged)", async () => {
+    let capturedBranch: string | undefined = "UNSET";
+
+    const rm = makeRm(async (_wp: string, _c: string, b?: string) => {
+      capturedBranch = b;
+      return { runId: asRunId("run001"), slug: asRunSlug("brave-otter") };
+    });
+
+    const app = createApiApp(rm);
+    await postRuns(app, {
+      workflowPath: "/workspace/workflow.json",
+      cwd: "/workspace/myproject",
+    });
+
+    expect(capturedBranch).toBeUndefined();
+  });
+
+  it("returns 400 when branch is an empty string", async () => {
+    let startRunCalled = false;
+    const rm = makeRm(async () => {
+      startRunCalled = true;
+      return { runId: asRunId("run001"), slug: asRunSlug("slug") };
+    });
+    const app = createApiApp(rm);
+
+    const res = await postRuns(app, {
+      workflowPath: "/tmp/wf.json",
+      cwd: "/tmp/project",
+      branch: "",
+    });
+
+    expect(res.status).toBe(400);
+    expect(startRunCalled).toBe(false);
   });
 
   it("returns 400 when cwd is missing", async () => {
@@ -315,6 +369,104 @@ describe("POST /runs — integration (real RunManager)", () => {
     } finally {
       await manager.shutdown();
       await rm(tempDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Integration tests — isolated runs over HTTP against real git repos
+// ---------------------------------------------------------------------------
+
+/** Create a committed git repo at `<parent>/<name>` and return its real path. */
+function initRepo(parent: string, name: string): string {
+  const repo = join(parent, name);
+  execFileSync("git", ["init", "-b", "main", repo], { stdio: "pipe" });
+  execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: repo, stdio: "pipe" });
+  execFileSync("git", ["config", "user.name", "Test"], { cwd: repo, stdio: "pipe" });
+  execFileSync("sh", ["-c", "printf '# repo\\n' > README.md"], { cwd: repo, stdio: "pipe" });
+  execFileSync("git", ["add", "."], { cwd: repo, stdio: "pipe" });
+  execFileSync("git", ["commit", "-m", "initial"], { cwd: repo, stdio: "pipe" });
+  return repo;
+}
+
+describe("POST /runs — isolated-run integration (real git)", () => {
+  it("starts an isolated run and surfaces worktreePath/branch on GET /runs and GET /runs/:id", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "start-run-iso-"));
+    const storageRoot = join(tempDir, "workflow-runner");
+    mkdirSync(storageRoot, { recursive: true });
+    // realpath so assertions match git's canonical paths (symlinked tmp on macOS).
+    const parentDir = realpathSync(mkdtempSync(join(tmpdir(), "start-run-iso-repo-")));
+
+    const factory = new FixtureSessionFactory();
+    const manager = new RunManager(storageRoot, factory);
+    try {
+      const repo = initRepo(parentDir, "app");
+      const wfPath = join(storageRoot, "test.json");
+      await Bun.write(wfPath, makeWorkflowJson("iso-http", "fake:hang"));
+
+      const app = createApiApp(manager);
+      const postRes = await postRuns(app, {
+        workflowPath: wfPath,
+        cwd: repo,
+        branch: "feature/iso",
+      });
+
+      expect(postRes.status).toBe(201);
+      const { runId } = await postRes.json() as { runId: string; slug: string };
+
+      const expectedWorktree = join(dirname(repo), `${basename(repo)}-feature-iso`);
+
+      // GET /runs surfaces worktreePath/branch.
+      const listRes = await app.request("/runs");
+      expect(listRes.status).toBe(200);
+      const { runs } = await listRes.json() as {
+        runs: { id: string; worktreePath?: string; branch?: string }[];
+      };
+      const listed = runs.find((r) => r.id === runId);
+      expect(listed).toBeDefined();
+      expect(listed?.worktreePath).toBe(expectedWorktree);
+      expect(listed?.branch).toBe("feature/iso");
+
+      // GET /runs/:id surfaces worktreePath/branch.
+      const detailRes = await app.request(`/runs/${runId}`);
+      expect(detailRes.status).toBe(200);
+      const detail = await detailRes.json() as Record<string, unknown>;
+      expect(detail.worktreePath).toBe(expectedWorktree);
+      expect(detail.branch).toBe("feature/iso");
+    } finally {
+      await manager.shutdown();
+      await rm(tempDir, { recursive: true, force: true }).catch(() => {});
+      await rm(parentDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
+  it("returns 400 (NOT_A_GIT_REPO) when starting with a branch against a non-git cwd", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "start-run-iso-"));
+    const storageRoot = join(tempDir, "workflow-runner");
+    mkdirSync(storageRoot, { recursive: true });
+    // A plain directory that is not inside any git repo.
+    const nonGitCwd = realpathSync(mkdtempSync(join(tmpdir(), "start-run-nogit-")));
+
+    const factory = new FixtureSessionFactory();
+    const manager = new RunManager(storageRoot, factory);
+    try {
+      const wfPath = join(storageRoot, "test.json");
+      await Bun.write(wfPath, makeWorkflowJson("iso-nogit", "fake:hang"));
+
+      const app = createApiApp(manager);
+      const res = await postRuns(app, {
+        workflowPath: wfPath,
+        cwd: nonGitCwd,
+        branch: "feature/iso",
+      });
+
+      expect(res.status).toBe(400);
+      const body = await res.json() as Record<string, unknown>;
+      expect(body.code).toBe("NOT_A_GIT_REPO");
+    } finally {
+      await manager.shutdown();
+      await rm(tempDir, { recursive: true, force: true }).catch(() => {});
+      await rm(nonGitCwd, { recursive: true, force: true }).catch(() => {});
     }
   });
 });

@@ -1,5 +1,5 @@
-import { describe, test, expect, beforeEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest'
+import { render, screen, waitFor, act } from '@testing-library/react'
 import { renderHook } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -17,6 +17,7 @@ import { server } from '../../../test/setup'
 import { useCwdStore } from '@/stores/cwd-store'
 import { StartRunForm } from './StartRunForm'
 import { useWorkflows } from './useWorkflows'
+import { RunView } from '../run-view/RunView'
 
 const BASE = 'http://127.0.0.1:4517'
 
@@ -256,6 +257,149 @@ describe('StartRunForm — manual path submission', () => {
         cwd: '/projects/myapp',
       })
     })
+  })
+})
+
+// ─── Unit: branch (isolation) input ─────────────────────────────────────────
+
+describe('StartRunForm — branch input', () => {
+  test('includes branch in the payload when a branch value is entered', async () => {
+    const user = userEvent.setup()
+    useCwdStore.getState().addCwd('proj', '/projects/myapp')
+
+    let capturedBody: unknown
+    server.use(
+      http.get(`${BASE}/workflows`, () => HttpResponse.json({ workflows: [] })),
+      http.post(`${BASE}/runs`, async ({ request }) => {
+        capturedBody = await request.json()
+        return HttpResponse.json({ runId: 'run-iso', slug: 'slug-iso' })
+      }),
+    )
+
+    renderForm()
+
+    const path = await screen.findByLabelText(/workflow path/i)
+    await user.type(path, '/projects/myapp/workflows/wf.json')
+    await user.type(screen.getByLabelText(/branch/i), 'feature/x')
+
+    await user.click(screen.getByRole('button', { name: /start run/i }))
+
+    await waitFor(() => {
+      expect(capturedBody).toEqual({
+        workflowPath: '/projects/myapp/workflows/wf.json',
+        cwd: '/projects/myapp',
+        branch: 'feature/x',
+      })
+    })
+  })
+
+  test('omits branch from the payload when the branch input is left empty', async () => {
+    const user = userEvent.setup()
+    useCwdStore.getState().addCwd('proj', '/projects/myapp')
+
+    let capturedBody: unknown
+    server.use(
+      http.get(`${BASE}/workflows`, () => HttpResponse.json({ workflows: [] })),
+      http.post(`${BASE}/runs`, async ({ request }) => {
+        capturedBody = await request.json()
+        return HttpResponse.json({ runId: 'run-plain', slug: 'slug-plain' })
+      }),
+    )
+
+    renderForm()
+
+    const path = await screen.findByLabelText(/workflow path/i)
+    await user.type(path, '/projects/myapp/workflows/wf.json')
+
+    await user.click(screen.getByRole('button', { name: /start run/i }))
+
+    await waitFor(() => {
+      expect(capturedBody).toEqual({
+        workflowPath: '/projects/myapp/workflows/wf.json',
+        cwd: '/projects/myapp',
+      })
+    })
+  })
+
+  test('treats a whitespace-only branch as empty (no branch sent)', async () => {
+    const user = userEvent.setup()
+    useCwdStore.getState().addCwd('proj', '/projects/myapp')
+
+    let capturedBody: unknown
+    server.use(
+      http.get(`${BASE}/workflows`, () => HttpResponse.json({ workflows: [] })),
+      http.post(`${BASE}/runs`, async ({ request }) => {
+        capturedBody = await request.json()
+        return HttpResponse.json({ runId: 'run-ws', slug: 'slug-ws' })
+      }),
+    )
+
+    renderForm()
+
+    const path = await screen.findByLabelText(/workflow path/i)
+    await user.type(path, '/projects/myapp/workflows/wf.json')
+    await user.type(screen.getByLabelText(/branch/i), '   ')
+
+    await user.click(screen.getByRole('button', { name: /start run/i }))
+
+    await waitFor(() => {
+      expect(capturedBody).toEqual({
+        workflowPath: '/projects/myapp/workflows/wf.json',
+        cwd: '/projects/myapp',
+      })
+    })
+  })
+})
+
+// ─── Integration: isolation start errors ────────────────────────────────────
+
+describe('StartRunForm — isolation start errors', () => {
+  test('surfaces a WORKTREE_CONFLICT error inline in the form', async () => {
+    const user = userEvent.setup()
+    useCwdStore.getState().addCwd('proj', '/p')
+
+    server.use(
+      http.get(`${BASE}/workflows`, () => HttpResponse.json({ workflows: [] })),
+      http.post(`${BASE}/runs`, () =>
+        HttpResponse.json(
+          { code: 'WORKTREE_CONFLICT', message: 'worktree path is occupied' },
+          { status: 400 },
+        ),
+      ),
+    )
+
+    renderForm()
+
+    const path = await screen.findByLabelText(/workflow path/i)
+    await user.type(path, '/p/workflows/wf.json')
+    await user.type(screen.getByLabelText(/branch/i), 'feature/x')
+    await user.click(screen.getByRole('button', { name: /start run/i }))
+
+    expect(await screen.findByTestId('submit-error')).toHaveTextContent('worktree path is occupied')
+  })
+
+  test('surfaces a NOT_A_GIT_REPO error inline in the form', async () => {
+    const user = userEvent.setup()
+    useCwdStore.getState().addCwd('proj', '/p')
+
+    server.use(
+      http.get(`${BASE}/workflows`, () => HttpResponse.json({ workflows: [] })),
+      http.post(`${BASE}/runs`, () =>
+        HttpResponse.json(
+          { code: 'NOT_A_GIT_REPO', message: 'not a git repository' },
+          { status: 400 },
+        ),
+      ),
+    )
+
+    renderForm()
+
+    const path = await screen.findByLabelText(/workflow path/i)
+    await user.type(path, '/p/workflows/wf.json')
+    await user.type(screen.getByLabelText(/branch/i), 'feature/x')
+    await user.click(screen.getByRole('button', { name: /start run/i }))
+
+    expect(await screen.findByTestId('submit-error')).toHaveTextContent('not a git repository')
   })
 })
 
@@ -609,5 +753,127 @@ describe('StartRunForm — integration: error handling', () => {
     await screen.findByTestId('submit-error')
 
     expect(router.state.location.pathname).toBe('/start')
+  })
+})
+
+// ─── Integration: start-with-branch → real RunView shows worktree/branch ─────
+
+class FakeWebSocket {
+  static OPEN = 1
+  static CLOSED = 3
+  readyState = FakeWebSocket.OPEN
+  url: string
+  static instances: FakeWebSocket[] = []
+  private listeners: Record<string, ((event: unknown) => void)[]> = {}
+
+  constructor(url: string) {
+    this.url = url
+    FakeWebSocket.instances.push(this)
+  }
+  addEventListener(type: string, cb: (event: unknown) => void) {
+    ;(this.listeners[type] ??= []).push(cb)
+  }
+  send() {}
+  close() {
+    this.readyState = FakeWebSocket.CLOSED
+  }
+  receive(data: unknown) {
+    for (const cb of this.listeners['message'] ?? []) cb({ data: JSON.stringify(data) })
+  }
+}
+
+describe('StartRunForm — integration: start isolated run shows worktree/branch', () => {
+  beforeEach(() => {
+    FakeWebSocket.instances = []
+    vi.stubGlobal('WebSocket', FakeWebSocket)
+    window.HTMLElement.prototype.scrollIntoView = vi.fn()
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  function renderFormWithRunView() {
+    const qc = makeQueryClient()
+    const rootRoute = createRootRoute({ component: () => <Outlet /> })
+    const startRoute = createRoute({
+      getParentRoute: () => rootRoute,
+      path: '/start',
+      component: StartRunForm,
+    })
+    const runViewRoute = createRoute({
+      getParentRoute: () => rootRoute,
+      path: '/runs/$runId',
+      component: function RunViewRoute() {
+        return <RunView runId="run-iso-int" />
+      },
+    })
+    const routeTree = rootRoute.addChildren([startRoute, runViewRoute])
+    const history = createMemoryHistory({ initialEntries: ['/start'] })
+    const router = createRouter({ routeTree, history })
+
+    return render(
+      <QueryClientProvider client={qc}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    )
+  }
+
+  test('submitting with a branch navigates to the run view and shows worktree + branch', async () => {
+    const user = userEvent.setup()
+    useCwdStore.getState().addCwd('proj', '/repo')
+
+    let capturedBody: unknown
+    server.use(
+      http.get(`${BASE}/workflows`, () => HttpResponse.json({ workflows: [] })),
+      http.post(`${BASE}/runs`, async ({ request }) => {
+        capturedBody = await request.json()
+        return HttpResponse.json({ runId: 'run-iso-int', slug: 'iso-int' })
+      }),
+    )
+
+    renderFormWithRunView()
+
+    const path = await screen.findByLabelText(/workflow path/i)
+    await user.type(path, '/repo/workflows/wf.json')
+    await user.type(screen.getByLabelText(/branch/i), 'feature/iso')
+    await user.click(screen.getByRole('button', { name: /start run/i }))
+
+    // Navigated to the real RunView, which opens an attach socket.
+    const runView = await screen.findByTestId('run-view')
+    expect(runView).toBeInTheDocument()
+    expect(capturedBody).toEqual({
+      workflowPath: '/repo/workflows/wf.json',
+      cwd: '/repo',
+      branch: 'feature/iso',
+    })
+
+    const ws = FakeWebSocket.instances[FakeWebSocket.instances.length - 1]
+    expect(ws).toBeDefined()
+    act(() => {
+      ws.receive({
+        type: 'snapshot',
+        snapshot: {
+          id: 'run-iso-int',
+          slug: 'iso-int',
+          workflowPath: '/repo/workflows/wf.json',
+          cwd: '/repo',
+          worktreePath: '/repo-feature-iso',
+          branch: 'feature/iso',
+          status: 'running',
+          currentStepId: null,
+          visitedStepIds: [],
+          startedAt: 1000,
+          endedAt: null,
+          attachedCount: 1,
+        },
+      })
+    })
+
+    await waitFor(() => {
+      expect(screen.getByTestId('isolation-info')).toBeInTheDocument()
+    })
+    expect(screen.getByTestId('isolation-branch')).toHaveTextContent('feature/iso')
+    expect(screen.getByTestId('isolation-worktree')).toHaveTextContent('/repo-feature-iso')
   })
 })

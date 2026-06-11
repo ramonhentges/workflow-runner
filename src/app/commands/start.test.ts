@@ -96,6 +96,139 @@ describe("start.run", () => {
     expect(params.cwd).toBe(process.cwd());
   });
 
+  it("forwards branch in the run.start RPC request when --branch is given", async () => {
+    const runId = asRunId("rid-branch");
+    const slug = asRunSlug("iso-otter");
+    const mock = createMockClient({
+      responders: {
+        "run.start": () => ({ runId, slug }),
+      },
+    });
+
+    const stdout = makeStream();
+    const stderr = makeStream();
+
+    const code = await start.run(["workflow.json", "--branch", "b", "--detach"], {
+      connect: async () => mock.asClient(),
+      isTty: () => false,
+      stdout,
+      stderr,
+    });
+
+    expect(code).toBe(0);
+    const startCall = mock.calls.find((c) => c.method === "run.start");
+    expect(startCall).toBeDefined();
+    const params = startCall!.params as {
+      workflowPath: string;
+      cwd: string;
+      branch?: string;
+    };
+    expect(params.workflowPath).toBe("workflow.json");
+    expect(params.cwd).toBe(process.cwd());
+    expect(params.branch).toBe("b");
+  });
+
+  it("omits branch from the run.start request when --branch is absent", async () => {
+    const runId = asRunId("rid-nobranch");
+    const slug = asRunSlug("plain-fox");
+    const mock = createMockClient({
+      responders: { "run.start": () => ({ runId, slug }) },
+    });
+
+    await start.run(["workflow.json", "--detach"], {
+      connect: async () => mock.asClient(),
+      isTty: () => false,
+      stdout: makeStream(),
+      stderr: makeStream(),
+    });
+
+    const startCall = mock.calls.find((c) => c.method === "run.start");
+    expect(startCall).toBeDefined();
+    expect("branch" in (startCall!.params as object)).toBe(false);
+  });
+
+  it("on NOT_A_GIT_REPO: prints a non-repo message and starts nothing", async () => {
+    const mock = createMockClient({
+      responders: {
+        "run.start": () => {
+          throw new DaemonRpcError(
+            RpcErrorCode.NOT_A_GIT_REPO,
+            "cwd is not inside a git repository",
+          );
+        },
+      },
+    });
+    const stdout = makeStream();
+    const stderr = makeStream();
+    const code = await start.run(["workflow.json", "--branch", "b", "--detach"], {
+      connect: async () => mock.asClient(),
+      isTty: () => false,
+      stdout,
+      stderr,
+    });
+    expect(code).toBe(1);
+    expect(stderr.chunks.join("")).toContain("not a git repository");
+    expect(stderr.chunks.join("")).toContain("cwd is not inside a git repository");
+    expect(stdout.chunks.join("")).toBe("");
+    expect(mock.closed).toBe(true);
+  });
+
+  it("on WORKTREE_CONFLICT: prints a conflict message and starts nothing", async () => {
+    const mock = createMockClient({
+      responders: {
+        "run.start": () => {
+          throw new DaemonRpcError(
+            RpcErrorCode.WORKTREE_CONFLICT,
+            "path already occupied by a non-worktree directory",
+          );
+        },
+      },
+    });
+    const stdout = makeStream();
+    const stderr = makeStream();
+    const code = await start.run(["workflow.json", "--branch", "b", "--detach"], {
+      connect: async () => mock.asClient(),
+      isTty: () => false,
+      stdout,
+      stderr,
+    });
+    expect(code).toBe(1);
+    expect(stderr.chunks.join("")).toContain("worktree conflict");
+    expect(stderr.chunks.join("")).toContain(
+      "path already occupied by a non-worktree directory",
+    );
+    expect(stdout.chunks.join("")).toBe("");
+    expect(mock.closed).toBe(true);
+  });
+
+  it("on BRANCH_IN_USE: prints a branch-checked-out message and starts nothing", async () => {
+    const mock = createMockClient({
+      responders: {
+        "run.start": () => {
+          throw new DaemonRpcError(
+            RpcErrorCode.BRANCH_IN_USE,
+            "Branch 'b' is already checked out in another worktree",
+          );
+        },
+      },
+    });
+    const stdout = makeStream();
+    const stderr = makeStream();
+    const code = await start.run(["workflow.json", "--branch", "b", "--detach"], {
+      connect: async () => mock.asClient(),
+      isTty: () => false,
+      stdout,
+      stderr,
+    });
+    expect(code).toBe(1);
+    expect(stderr.chunks.join("")).toContain("branch already checked out");
+    expect(stderr.chunks.join("")).toContain(
+      "Branch 'b' is already checked out in another worktree",
+    );
+    expect(stdout.chunks.join("")).toBe("");
+    expect(mock.closed).toBe(true);
+  });
+
   it("with --detach: prints '{runId} {slug}' to stdout and skips attach", async () => {
     const runId = asRunId("rid-2");
     const slug = asRunSlug("wise-fox");

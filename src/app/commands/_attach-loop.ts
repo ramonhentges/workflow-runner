@@ -58,7 +58,7 @@ export async function attachLoop(
     throw err;
   }
 
-  const { runId: resolvedRunId, backlog } = result;
+  const { runId: resolvedRunId, backlog, initialSnapshot } = result;
 
   let resolveQuit!: () => void;
   const quitPromise = new Promise<void>((resolve) => {
@@ -82,6 +82,9 @@ export async function attachLoop(
       earlyEvents,
       droppedEarlyEvents,
     );
+    // Surface the run's isolation info (branch/worktree) in the header so an
+    // attached user sees where isolated work lives (PRD Core Feature #3).
+    tui.setIsolation(initialSnapshot);
     handedOff = true;
     tui.attachSource(source);
 

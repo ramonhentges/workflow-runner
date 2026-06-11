@@ -68,6 +68,57 @@ describe("parseStartArgs", () => {
     }
   });
 
+  it("parses --branch <name> alongside the workflow path", () => {
+    const result = parseStartArgs(["wf.json", "--branch", "feature-x"]);
+    expect(result).toEqual({
+      ok: true,
+      value: { workflowPath: "wf.json", detach: false, branch: "feature-x" },
+    });
+  });
+
+  it("parses --branch together with --detach", () => {
+    const result = parseStartArgs(["wf.json", "--branch", "feature-x", "--detach"]);
+    expect(result).toEqual({
+      ok: true,
+      value: { workflowPath: "wf.json", detach: true, branch: "feature-x" },
+    });
+  });
+
+  it("parses the --branch=<name> form", () => {
+    const result = parseStartArgs(["wf.json", "--branch=feature-x"]);
+    expect(result).toEqual({
+      ok: true,
+      value: { workflowPath: "wf.json", detach: false, branch: "feature-x" },
+    });
+  });
+
+  it("returns an error when --branch is given without a value", () => {
+    const result = parseStartArgs(["wf.json", "--branch"]);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toMatch(/--branch requires a value/);
+    }
+  });
+
+  it("returns an error when --branch is immediately followed by a flag", () => {
+    const result = parseStartArgs(["wf.json", "--branch", "--detach"]);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toMatch(/--branch requires a value/);
+    }
+  });
+
+  it("omits branch from the parsed value when --branch is absent", () => {
+    const result = parseStartArgs(["wf.json"]);
+    expect(result).toEqual({
+      ok: true,
+      value: { workflowPath: "wf.json", detach: false },
+    });
+    if (result.ok && "value" in result) {
+      expect("branch" in result.value).toBe(false);
+    }
+  });
+
   it("returns help when --help is present", () => {
     expect(parseStartArgs(["--help"])).toEqual({ ok: true, help: true });
   });

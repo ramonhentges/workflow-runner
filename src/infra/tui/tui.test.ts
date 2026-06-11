@@ -210,6 +210,71 @@ describe("Tui.attachSource", () => {
   });
 });
 
+describe("Tui.setIsolation", () => {
+  let renderer: TestRenderer;
+  let renderOnce: () => Promise<void>;
+  let captureCharFrame: () => string;
+
+  beforeEach(async () => {
+    const created = await createTestRenderer({ width: 80, height: 24 });
+    renderer = created.renderer;
+    renderOnce = created.renderOnce;
+    captureCharFrame = created.captureCharFrame;
+  });
+
+  afterEach(() => {
+    try {
+      renderer.destroy();
+    } catch {
+      // ignore
+    }
+  });
+
+  it("renders branch and worktree in the header for an isolated snapshot", async () => {
+    const tui = await makeTui(renderer);
+    tui.setIsolation({ branch: "feat/iso", worktreePath: "/tmp/wt-iso" });
+    await renderOnce();
+
+    const frame = captureCharFrame();
+    expect(frame).toContain("branch feat/iso");
+    expect(frame).toContain("worktree /tmp/wt-iso");
+  });
+
+  it("renders only branch when worktree is absent", async () => {
+    const tui = await makeTui(renderer);
+    tui.setIsolation({ branch: "feat/iso" });
+    await renderOnce();
+
+    const frame = captureCharFrame();
+    expect(frame).toContain("branch feat/iso");
+    expect(frame).not.toContain("worktree");
+  });
+
+  it("shows no isolation segment for a non-isolated snapshot", async () => {
+    const tui = await makeTui(renderer);
+    tui.setIsolation({});
+    await renderOnce();
+
+    const frame = captureCharFrame();
+    expect(frame).not.toContain("branch");
+    expect(frame).not.toContain("worktree");
+    expect(frame).not.toContain("↳");
+  });
+
+  it("clears a previously shown isolation segment when re-set empty", async () => {
+    const tui = await makeTui(renderer);
+    tui.setIsolation({ branch: "feat/iso", worktreePath: "/tmp/wt-iso" });
+    await renderOnce();
+    expect(captureCharFrame()).toContain("branch feat/iso");
+
+    tui.setIsolation({});
+    await renderOnce();
+    const frame = captureCharFrame();
+    expect(frame).not.toContain("branch feat/iso");
+    expect(frame).not.toContain("worktree");
+  });
+});
+
 describe("Tui.submitInput", () => {
   let renderer: TestRenderer;
 

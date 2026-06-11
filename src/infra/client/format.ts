@@ -63,8 +63,25 @@ export function formatPsTable(rows: readonly RunListEntry[], now?: number): stri
   });
 
   const lines: string[] = [renderPsRow(PS_HEADERS, widths)];
-  for (const row of dataRows) lines.push(renderPsRow(row, widths));
+  dataRows.forEach((row, i) => {
+    lines.push(renderPsRow(row, widths));
+    const isolation = formatIsolationLine(sorted[i]);
+    if (isolation !== null) lines.push(isolation);
+  });
   return lines.join("\n");
+}
+
+/**
+ * Continuation line shown under an isolated run's row, surfacing its branch and
+ * worktree path. Returns null for non-isolated runs so existing rows render
+ * unchanged (no extra line, no new column).
+ */
+function formatIsolationLine(r: RunListEntry): string | null {
+  const parts: string[] = [];
+  if (r.branch) parts.push(`branch ${r.branch}`);
+  if (r.worktreePath) parts.push(`worktree ${r.worktreePath}`);
+  if (parts.length === 0) return null;
+  return `  ↳ ${parts.join("  ")}`;
 }
 
 export function formatDoctorReport(report: DoctorReport): string {

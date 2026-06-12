@@ -132,6 +132,28 @@ describe('Transcript — tool_call row markup', () => {
   })
 })
 
+// ─── Message rendering: markdown via Streamdown ──────────────────────────────
+
+describe('Transcript — message markdown rendering', () => {
+  function messageItem(text: string): TranscriptItem {
+    return { kind: 'message', stepId: 'step-1', text, seqStart: 1, seqEnd: 1 }
+  }
+
+  test('renders markdown structure (heading, list, inline code) for message items', () => {
+    render(<Transcript items={[messageItem('# Title\n\n- a\n- b\n\n`code`')]} />)
+    const row = screen.getByTestId('transcript-item')
+    expect(row).toHaveAttribute('data-kind', 'message')
+    expect(row.querySelector('h1')).toHaveTextContent('Title')
+    expect(row.querySelectorAll('li')).toHaveLength(2)
+    expect(row.querySelector('code')).toHaveTextContent('code')
+  })
+
+  test('plain message text remains findable as a single block', () => {
+    render(<Transcript items={[messageItem('Hello from agent')]} />)
+    expect(screen.getByText('Hello from agent')).toBeInTheDocument()
+  })
+})
+
 // ─── Integration: live transitions + finished-run replay via the reducer ─────
 
 describe('Transcript — tool_call live transitions (keyed by toolCallId)', () => {

@@ -212,5 +212,30 @@ describe('AppShell cwd switcher', () => {
 
     expect(useCwdStore.getState().activeCwdId).toBe('b')
     expect(selector).toHaveTextContent('Proj B')
+
+    // The header label tracks the active selection too.
+    expect(screen.getByTestId('working-dir-label')).toHaveTextContent('Proj B')
+  })
+})
+
+// ─── Working-directory header label ─────────────────────────────────────────
+
+describe('AppShell working-dir label', () => {
+  test('shows the active cwd label with the path as a tooltip', async () => {
+    useCwdStore.setState({
+      cwds: [{ id: 'a', label: 'Proj A', path: '/p/a' }],
+      activeCwdId: 'a',
+    })
+    renderApp('/')
+
+    const label = await screen.findByTestId('working-dir-label')
+    expect(label).toHaveTextContent('Proj A')
+    expect(label).toHaveAttribute('title', '/p/a')
+  })
+
+  test('renders nothing when no cwd is active', async () => {
+    renderApp('/')
+    await screen.findByTestId('app-shell')
+    expect(screen.queryByTestId('working-dir-label')).not.toBeInTheDocument()
   })
 })

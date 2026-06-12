@@ -18,6 +18,7 @@ import { ApiError } from '@/lib/api/client'
 import type { WorkflowScope, WorkflowUpdateBody } from '@/lib/api/types'
 import { useCreateWorkflow, useUpdateWorkflow } from './useWorkflow'
 import { StepFields } from './StepFields'
+import { readLastIde } from './lastIde'
 import {
   WorkflowDraftSchema,
   blankWorkflow,
@@ -255,7 +256,7 @@ export function WorkflowEditor({
                     id: '',
                     agent: '',
                     model: '',
-                    ide: 'claude-code',
+                    ide: readLastIde(),
                     mode: 'interactive',
                     description: '',
                     edges: [],

@@ -15,6 +15,7 @@ import type { WorkflowDraft } from './WorkflowDraftSchema'
 import { EdgesField } from './EdgesField'
 import { AgentModelPicker } from './AgentModelPicker'
 import { useIdeCatalog } from './useIdeCatalog'
+import { writeLastIde } from './lastIde'
 
 const SUPPORTED_IDES = ['opencode', 'claude-code', 'codex', 'gemini'] as const
 
@@ -127,7 +128,13 @@ export function StepFields({
             name={`steps.${stepIndex}.ide`}
             control={control}
             render={({ field }) => (
-              <Select value={field.value} onValueChange={field.onChange}>
+              <Select
+                value={field.value}
+                onValueChange={value => {
+                  writeLastIde(value)
+                  field.onChange(value)
+                }}
+              >
                 <SelectTrigger
                   id={`step-ide-${stepIndex}`}
                   className="w-full"

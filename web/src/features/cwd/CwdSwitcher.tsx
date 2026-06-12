@@ -57,6 +57,16 @@ export function CwdSwitcher() {
 
   const [manageOpen, setManageOpen] = useState(false)
 
+  // Present both the combo box and the manage list alphabetically by label.
+  // Spread first: Array.sort mutates in place and the store array is shared.
+  const sortedCwds = useMemo(
+    () =>
+      [...cwds].sort((a, b) =>
+        a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }),
+      ),
+    [cwds],
+  )
+
   const schema = useMemo(() => cwdFormSchema(cwds), [cwds])
   const {
     register,
@@ -93,7 +103,7 @@ export function CwdSwitcher() {
             {/* popper (not item-aligned): the trigger sits at the bottom of the
                 viewport, so the list must flip above it instead of overlaying. */}
             <SelectContent position="popper" side="top">
-              {cwds.map(cwd => (
+              {sortedCwds.map(cwd => (
                 <CwdSelectItem key={cwd.id} id={cwd.id} label={cwd.label} path={cwd.path} />
               ))}
             </SelectContent>
@@ -145,7 +155,7 @@ export function CwdSwitcher() {
 
           {hasCwds ? (
             <ul className="flex flex-col gap-1">
-              {cwds.map(cwd => (
+              {sortedCwds.map(cwd => (
                 <li key={cwd.id} className="flex items-center gap-2 rounded px-2 py-1">
                   <span className="flex min-w-0 flex-1 flex-col">
                     <span className="truncate text-sm font-medium">{cwd.label}</span>

@@ -1,5 +1,7 @@
 import { Circle, CircleCheck, CircleX, LoaderCircle } from 'lucide-react'
 import { useEffect, useRef } from 'react'
+import { Streamdown } from 'streamdown'
+import { code } from '@streamdown/code'
 import { cn } from '@/lib/utils'
 import type { ToolCallStatus } from '@/lib/api/types'
 import type { TranscriptItem } from '@/lib/ws/reducer'
@@ -49,6 +51,32 @@ function ToolCallStatusIcon({ status }: { status: ToolCallStatus }) {
         />
       )
   }
+}
+
+// Agent/user chat messages carry markdown (headings, lists, code, tables). Render
+// them through Streamdown — it tolerates the incomplete markdown that arrives mid-
+// stream — styled with the typography `prose` classes so the output follows the
+// active light/dark color mode via `dark:prose-invert`. `font-sans` resets the
+// transcript container's `font-mono` so prose body text reads normally while code
+// spans/blocks stay monospace; `max-w-none` lets messages use the full panel width.
+// The `code` plugin syntax-highlights fenced blocks via Shiki, with a light/dark
+// theme pair so highlighting tracks the active color mode alongside `dark:prose-invert`.
+function MessageItem({ item }: { item: TranscriptItem }) {
+  return (
+    <div
+      data-testid="transcript-item"
+      data-kind="message"
+      className="text-foreground"
+    >
+      <Streamdown
+        plugins={{ code }}
+        shikiTheme={['github-light', 'github-dark']}
+        className="prose prose-sm dark:prose-invert max-w-none font-sans break-words"
+      >
+        {item.text}
+      </Streamdown>
+    </div>
+  )
 }
 
 function ToolCallRow({ item }: { item: TranscriptItem }) {
@@ -106,6 +134,8 @@ export function Transcript({ items, truncated }: TranscriptProps) {
         // colliding on a duplicate React key.
         item.kind === 'tool_call' ? (
           <ToolCallRow key={`tool-${item.stepId ?? ''}-${item.toolCallId}`} item={item} />
+        ) : item.kind === 'message' ? (
+          <MessageItem key={`${item.seqStart}-message`} item={item} />
         ) : (
           <div
             key={`${item.seqStart}-${item.kind}`}
@@ -114,7 +144,6 @@ export function Transcript({ items, truncated }: TranscriptProps) {
             className={cn(
               'whitespace-pre-wrap break-words',
               item.kind === 'step' && 'mt-2 border-b border-border py-1 font-semibold text-primary',
-              item.kind === 'message' && 'text-foreground',
               item.kind === 'log' && 'text-xs text-muted-foreground',
               item.kind === 'status' && 'italic text-status-running',
             )}

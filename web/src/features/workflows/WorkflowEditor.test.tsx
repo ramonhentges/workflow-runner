@@ -70,6 +70,9 @@ function makeHookWrapper(queryClient: QueryClient) {
 
 beforeEach(() => {
   useCwdStore.setState({ cwds: [], activeCwdId: null })
+  // The IDE select persists the last choice to localStorage as the default for
+  // newly added steps; clear it so tests don't leak the default across cases.
+  localStorage.clear()
 })
 
 // ── No-cwd guard ──────────────────────────────────────────────────────────────
@@ -621,6 +624,31 @@ describe('WorkflowEditor — shadcn Select fields', () => {
     await user.click(await screen.findByRole('option', { name: 'codex' }))
 
     expect(trigger).toHaveTextContent('codex')
+  })
+
+  test('a newly added step defaults to the last selected IDE', async () => {
+    const user = userEvent.setup()
+    server.use(
+      http.get(`${BASE}/ide/:ide/catalog`, () =>
+        HttpResponse.json({ reachable: false, agents: [], models: [] }),
+      ),
+    )
+    renderEditor({ mode: 'create' })
+    await screen.findByTestId('add-step-button')
+
+    await user.click(screen.getByTestId('add-step-button'))
+
+    // First step starts on the claude-code fallback, then user picks opencode.
+    const firstTrigger = screen.getByTestId('step-ide-select-0')
+    expect(firstTrigger).toHaveTextContent('claude-code')
+    await user.click(firstTrigger)
+    await user.click(await screen.findByRole('option', { name: 'opencode' }))
+    expect(firstTrigger).toHaveTextContent('opencode')
+
+    // The next added step inherits the persisted choice rather than claude-code.
+    await user.click(screen.getByTestId('add-step-button'))
+    expect(screen.getByTestId('step-ide-select-1')).toHaveTextContent('opencode')
+    expect(localStorage.getItem('wfr.lastIde')).toBe('opencode')
   })
 
   test('mode Select toggles between interactive and autonomous', async () => {

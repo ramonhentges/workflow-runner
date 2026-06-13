@@ -7,7 +7,12 @@ import { WorkflowConfigError } from "../../../domain/workflow.js";
 export function createRunStartHandler(rm: RunManager): RpcHandler<"run.start"> {
   return async (params) => {
     try {
-      return await rm.startRun(params.workflowPath, params.cwd, params.branch);
+      return await rm.startRun(
+        params.workflowPath,
+        params.cwd,
+        params.branch,
+        params.initialPrompt,
+      );
     } catch (e) {
       if (e instanceof RunManagerError) {
         // Carries the RpcErrorCode for its name, so isolation failures

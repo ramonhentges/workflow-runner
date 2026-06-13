@@ -7,6 +7,10 @@ import { tmpdir } from "node:os";
 import { RunManager } from "./run-manager.js";
 import { RunStore } from "./run-store.js";
 import { FakeSessionFactory } from "./test-helpers/fake-session-factory.js";
+import { asStepId } from "../../domain/ids.js";
+import type { InboundMessage } from "../../domain/runner.js";
+import { Workflow } from "../../domain/workflow.js";
+import { buildKickoffPrompt } from "../acp/agent-session.js";
 
 // These tests drive a real RunManager against a real temporary git repository,
 // exercising the actual SimpleGitWorktrees adapter end to end (the unit tests
@@ -126,6 +130,159 @@ describe("RunManager worktree integration (real git)", () => {
     expect(firstWorktree).toBe(expectedWorktree);
     expect(secondWorktree).toBe(expectedWorktree);
     expect(secondRecord.run.snapshot().status).toBe("completed");
+
+    await manager.shutdown();
+  });
+});
+
+describe("RunManager initialPrompt threading", () => {
+  let workDir: string;
+  let storageDir: string;
+  let wfPath: string;
+
+  beforeEach(async () => {
+    // No git isolation here: these runs pass no branch, so a plain directory cwd
+    // is sufficient to exercise the prompt-threading and per-path kind logic.
+    workDir = realpathSync(await mkdtemp(join(tmpdir(), "run-manager-prompt-")));
+    storageDir = realpathSync(await mkdtemp(join(tmpdir(), "run-manager-prompt-store-")));
+    wfPath = join(workDir, "wf.json");
+    await Bun.write(wfPath, SINGLE_STEP_WORKFLOW);
+  });
+
+  afterEach(async () => {
+    await rm(workDir, { recursive: true, force: true });
+    await rm(storageDir, { recursive: true, force: true });
+  });
+
+  async function firstStep(): Promise<import("../../domain/workflow.js").Step> {
+    const workflow = await Workflow.load(wfPath);
+    const step = workflow.getStep(workflow.firstStepId());
+    if (!step) throw new Error("entry step not found");
+    return step;
+  }
+
+  it("persists initialPrompt and frames the entry step as a user request", async () => {
+    const inbounds: Array<InboundMessage | null> = [];
+    const factory = new FakeSessionFactory({
+      onCreate: (args) => inbounds.push(args.inbound),
+      resolveOutcome: () => ({ kind: "finish", message: "done" }),
+    });
+    const manager = new RunManager(storageDir, factory);
+
+    const { runId } = await manager.startRun(wfPath, workDir, undefined, "review PR #42");
+    const record = manager.get(runId);
+    if (!record) throw new Error("record not found");
+    await record.runPromise;
+
+    const snap = record.run.snapshot();
+    expect(snap.status).toBe("completed");
+    expect(snap.initialPrompt).toBe("review PR #42");
+
+    // The entry step receives the prompt framed as a user request.
+    expect(inbounds).toEqual([{ message: "review PR #42", kind: "user-request" }]);
+    const kickoff = buildKickoffPrompt(await firstStep(), inbounds[0]!);
+    expect(kickoff).toContain("User request for this run: review PR #42");
+
+    // The run store round-trips the field like every other snapshot field.
+    const store = new RunStore({ storageRoot: storageDir });
+    const persisted = await store.load(runId);
+    expect(persisted.initialPrompt).toBe("review PR #42");
+
+    await manager.shutdown();
+  });
+
+  it("omits initialPrompt and sends no inbound when started without a prompt", async () => {
+    const inbounds: Array<InboundMessage | null> = [];
+    const factory = new FakeSessionFactory({
+      onCreate: (args) => inbounds.push(args.inbound),
+      resolveOutcome: () => ({ kind: "finish", message: "done" }),
+    });
+    const manager = new RunManager(storageDir, factory);
+
+    const { runId } = await manager.startRun(wfPath, workDir);
+    const record = manager.get(runId);
+    if (!record) throw new Error("record not found");
+    await record.runPromise;
+
+    const snap = record.run.snapshot();
+    expect(snap.status).toBe("completed");
+    // Absent, not undefined-leaked: the field is omitted from the snapshot.
+    expect("initialPrompt" in snap).toBe(false);
+
+    // No inbound is delivered, so the entry kickoff is identical to before.
+    expect(inbounds).toEqual([null]);
+    const kickoff = buildKickoffPrompt(await firstStep(), inbounds[0]);
+    expect(kickoff).not.toContain("User request for this run");
+    expect(kickoff).not.toContain("Context from previous step");
+
+    await manager.shutdown();
+  });
+
+  it("retry re-enters the failed step with a handoff-framed inbound", async () => {
+    const inbounds: Array<InboundMessage | null> = [];
+    const factory = new FakeSessionFactory({
+      onCreate: (args) => inbounds.push(args.inbound),
+      resolveOutcome: () => ({
+        kind: "failure",
+        failedStep: asStepId("step-1"),
+        reason: "boom",
+      }),
+    });
+    const manager = new RunManager(storageDir, factory);
+
+    const { runId } = await manager.startRun(wfPath, workDir, undefined, "review PR #42");
+    const record = manager.get(runId);
+    if (!record) throw new Error("record not found");
+    await record.runPromise;
+    expect(record.run.snapshot().status).toBe("failed");
+    // Fresh start framed the prompt as a user request.
+    expect(inbounds[0]).toEqual({ message: "review PR #42", kind: "user-request" });
+
+    await manager.retryStep(runId);
+    const retried = manager.get(runId);
+    if (!retried) throw new Error("record not found after retry");
+    await retried.runPromise;
+
+    // Retry re-enters with the same message but framed as a handoff.
+    expect(inbounds).toHaveLength(2);
+    expect(inbounds[1]).toEqual({ message: "review PR #42", kind: "handoff" });
+    const kickoff = buildKickoffPrompt(await firstStep(), inbounds[1]!);
+    expect(kickoff).toContain("Context from previous step: review PR #42");
+    expect(kickoff).not.toContain("User request for this run");
+
+    await manager.shutdown();
+  });
+
+  it("normalizes a blank/whitespace prompt to the no-prompt path", async () => {
+    const inbounds: Array<InboundMessage | null> = [];
+    const factory = new FakeSessionFactory({
+      onCreate: (args) => inbounds.push(args.inbound),
+      resolveOutcome: () => ({ kind: "finish", message: "done" }),
+    });
+    const manager = new RunManager(storageDir, factory);
+
+    // A whitespace-only prompt reaches startRun (e.g. `--prompt "   "`, which the
+    // CLI space-form accepts, or a bare zod string on the HTTP path). It must be
+    // byte-for-byte equivalent to starting with no prompt at all.
+    const { runId } = await manager.startRun(wfPath, workDir, undefined, "   \n\t ");
+    const record = manager.get(runId);
+    if (!record) throw new Error("record not found");
+    await record.runPromise;
+
+    const snap = record.run.snapshot();
+    expect(snap.status).toBe("completed");
+    // Dropped, not persisted as an empty string.
+    expect("initialPrompt" in snap).toBe(false);
+
+    // No inbound is delivered, so the entry kickoff matches the no-prompt path.
+    expect(inbounds).toEqual([null]);
+    const kickoff = buildKickoffPrompt(await firstStep(), inbounds[0]);
+    expect(kickoff).not.toContain("User request for this run");
+
+    // The store round-trips without the field, just like an omitted prompt.
+    const store = new RunStore({ storageRoot: storageDir });
+    const persisted = await store.load(runId);
+    expect("initialPrompt" in persisted).toBe(false);
 
     await manager.shutdown();
   });

@@ -40,7 +40,7 @@ function makeArgs(step: Step, cwd = "/tmp"): RunnerAgentSessionArgs {
     status: () => {},
     toolCall: () => {},
   };
-  return { step, cwd, tools, inboundMessage: null, sink };
+  return { step, cwd, tools, inbound: null, sink };
 }
 
 describe("parseFakeMarker", () => {

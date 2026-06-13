@@ -51,6 +51,9 @@ export const RunDetailSchema = z.object({
   startedAt: z.number(),
   endedAt: z.number().nullable(),
   attachedCount: z.number().int().nonnegative(),
+  // Present only when the run was started with an initial prompt (ADR-003).
+  // Intentionally excluded from the compact RunSummary/ps projection.
+  initialPrompt: z.string().optional(),
 });
 export type RunDetail = z.infer<typeof RunDetailSchema>;
 
@@ -93,10 +96,14 @@ export type ClientFrame = z.infer<typeof ClientFrameSchema>;
 // must be non-empty (ADR-001). The value is trimmed first, so a whitespace-only
 // branch (e.g. `" "`) is rejected rather than flowing into git/worktree paths as
 // a degenerate ref. Omitting it leaves behavior unchanged.
+// `initialPrompt` is optional free text delivered to the entry step as the
+// run's "User request" (ADR-003). An omitted/blank prompt is dropped by the
+// caller, so the no-prompt path is unchanged; a non-string is rejected here.
 export const StartRunRequestSchema = z.object({
   workflowPath: z.string().min(1),
   cwd: z.string().min(1),
   branch: z.string().trim().min(1).optional(),
+  initialPrompt: z.string().optional(),
 });
 export type StartRunRequest = z.infer<typeof StartRunRequestSchema>;
 

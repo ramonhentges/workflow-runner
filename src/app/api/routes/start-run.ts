@@ -57,10 +57,10 @@ const startRunRoute = createRoute({
 
 export function registerStartRunRoute(app: ApiApp, rm: RunManager): void {
   app.openapi(startRunRoute, async (c) => {
-    const { workflowPath, cwd, branch } = c.req.valid("json");
+    const { workflowPath, cwd, branch, initialPrompt } = c.req.valid("json");
 
     try {
-      const result = await rm.startRun(workflowPath, cwd, branch);
+      const result = await rm.startRun(workflowPath, cwd, branch, initialPrompt);
       return c.json({ runId: result.runId, slug: result.slug }, 201);
     } catch (err) {
       const { status, code, message } = mapError(err);

@@ -85,6 +85,9 @@ export async function attachLoop(
     // Surface the run's isolation info (branch/worktree) in the header so an
     // attached user sees where isolated work lives (PRD Core Feature #3).
     tui.setIsolation(initialSnapshot);
+    // Show the prompt the run was started with as the opening transcript entry,
+    // matching the web run view (ADR-003). No-op when the run had no prompt.
+    tui.showInitialPrompt(initialSnapshot.initialPrompt);
     handedOff = true;
     tui.attachSource(source);
 

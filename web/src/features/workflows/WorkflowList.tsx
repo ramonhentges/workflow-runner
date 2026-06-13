@@ -17,6 +17,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Textarea } from '@/components/ui/textarea'
 import {
   Table,
   TableBody,
@@ -57,6 +58,7 @@ export function WorkflowList() {
   // (PRD Core Feature #1), mirroring StartRunForm's branch field.
   const [runDialogWorkflow, setRunDialogWorkflow] = useState<WorkflowItem | null>(null)
   const [branch, setBranch] = useState('')
+  const [initialPrompt, setInitialPrompt] = useState('')
   const [startError, setStartError] = useState('')
   const { data, isLoading, isError } = useWorkflowList()
   const workflows = data?.workflows ?? []
@@ -67,17 +69,27 @@ export function WorkflowList() {
   const deleteMutation = useDeleteWorkflow()
 
   const startMutation = useMutation({
-    mutationFn: ({ workflow, branch }: { workflow: WorkflowItem; branch: string }) => {
+    mutationFn: ({
+      workflow,
+      branch,
+      initialPrompt,
+    }: {
+      workflow: WorkflowItem
+      branch: string
+      initialPrompt: string
+    }) => {
       if (!activeCwd) throw new Error('No active working directory selected.')
       // A non-empty branch opts the run into git-worktree isolation (ADR-001);
       // leaving it blank starts a normal run in the active cwd. Same request
       // shaping as StartRunForm so the non-isolated path is byte-for-byte
-      // identical.
+      // identical. The optional initial prompt is shaped the same way (ADR-001).
       const trimmedBranch = branch.trim()
+      const trimmedPrompt = initialPrompt.trim()
       return startRun({
         workflowPath: workflow.path,
         cwd: activeCwd.path,
         ...(trimmedBranch ? { branch: trimmedBranch } : {}),
+        ...(trimmedPrompt ? { initialPrompt: trimmedPrompt } : {}),
       })
     },
     onMutate: () => {
@@ -217,6 +229,7 @@ export function WorkflowList() {
                           size="sm"
                           onClick={() => {
                             setBranch('')
+                            setInitialPrompt('')
                             setStartError('')
                             setRunDialogWorkflow(workflow)
                           }}
@@ -305,6 +318,7 @@ export function WorkflowList() {
           if (!open) {
             setRunDialogWorkflow(null)
             setBranch('')
+            setInitialPrompt('')
             setStartError('')
           }
         }}
@@ -323,7 +337,7 @@ export function WorkflowList() {
             onSubmit={e => {
               e.preventDefault()
               if (runDialogWorkflow) {
-                startMutation.mutate({ workflow: runDialogWorkflow, branch })
+                startMutation.mutate({ workflow: runDialogWorkflow, branch, initialPrompt })
               }
             }}
           >
@@ -341,6 +355,24 @@ export function WorkflowList() {
               <p className="text-xs text-muted-foreground">
                 Run in an isolated git worktree on this branch. Leave blank to run in the working
                 directory.
+              </p>
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="run-initial-prompt-input">Initial prompt (optional)</Label>
+              <Textarea
+                id="run-initial-prompt-input"
+                value={initialPrompt}
+                onChange={e => {
+                  setInitialPrompt(e.target.value)
+                  setStartError('')
+                }}
+                placeholder="e.g. review PR #42"
+                rows={3}
+              />
+              <p className="text-xs text-muted-foreground">
+                Sent to the first step's agent as a user request for this run. Leave blank to start
+                the workflow as-is.
               </p>
             </div>
 

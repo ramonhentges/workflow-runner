@@ -351,6 +351,162 @@ describe('StartRunForm — branch input', () => {
   })
 })
 
+// ─── Unit: initial prompt input ─────────────────────────────────────────────
+
+describe('StartRunForm — initial prompt input', () => {
+  test('includes initialPrompt in the payload when the prompt textarea is filled', async () => {
+    const user = userEvent.setup()
+    useCwdStore.getState().addCwd('proj', '/projects/myapp')
+
+    let capturedBody: unknown
+    server.use(
+      http.get(`${BASE}/workflows`, () => HttpResponse.json({ workflows: [] })),
+      http.post(`${BASE}/runs`, async ({ request }) => {
+        capturedBody = await request.json()
+        return HttpResponse.json({ runId: 'run-prompt', slug: 'slug-prompt' })
+      }),
+    )
+
+    renderForm()
+
+    const path = await screen.findByLabelText(/workflow path/i)
+    await user.type(path, '/projects/myapp/workflows/wf.json')
+    await user.type(screen.getByLabelText(/initial prompt/i), 'review PR #42')
+
+    await user.click(screen.getByRole('button', { name: /start run/i }))
+
+    await waitFor(() => {
+      expect(capturedBody).toEqual({
+        workflowPath: '/projects/myapp/workflows/wf.json',
+        cwd: '/projects/myapp',
+        initialPrompt: 'review PR #42',
+      })
+    })
+  })
+
+  test('omits initialPrompt from the payload when the prompt textarea is left empty', async () => {
+    const user = userEvent.setup()
+    useCwdStore.getState().addCwd('proj', '/projects/myapp')
+
+    let capturedBody: unknown
+    server.use(
+      http.get(`${BASE}/workflows`, () => HttpResponse.json({ workflows: [] })),
+      http.post(`${BASE}/runs`, async ({ request }) => {
+        capturedBody = await request.json()
+        return HttpResponse.json({ runId: 'run-plain', slug: 'slug-plain' })
+      }),
+    )
+
+    renderForm()
+
+    const path = await screen.findByLabelText(/workflow path/i)
+    await user.type(path, '/projects/myapp/workflows/wf.json')
+
+    await user.click(screen.getByRole('button', { name: /start run/i }))
+
+    await waitFor(() => {
+      expect(capturedBody).toEqual({
+        workflowPath: '/projects/myapp/workflows/wf.json',
+        cwd: '/projects/myapp',
+      })
+    })
+  })
+
+  test('treats a whitespace-only prompt as empty (no initialPrompt sent)', async () => {
+    const user = userEvent.setup()
+    useCwdStore.getState().addCwd('proj', '/projects/myapp')
+
+    let capturedBody: unknown
+    server.use(
+      http.get(`${BASE}/workflows`, () => HttpResponse.json({ workflows: [] })),
+      http.post(`${BASE}/runs`, async ({ request }) => {
+        capturedBody = await request.json()
+        return HttpResponse.json({ runId: 'run-ws', slug: 'slug-ws' })
+      }),
+    )
+
+    renderForm()
+
+    const path = await screen.findByLabelText(/workflow path/i)
+    await user.type(path, '/projects/myapp/workflows/wf.json')
+    await user.type(screen.getByLabelText(/initial prompt/i), '   ')
+
+    await user.click(screen.getByRole('button', { name: /start run/i }))
+
+    await waitFor(() => {
+      expect(capturedBody).toEqual({
+        workflowPath: '/projects/myapp/workflows/wf.json',
+        cwd: '/projects/myapp',
+      })
+    })
+  })
+
+  test('forwards both branch and initialPrompt together when both are filled', async () => {
+    const user = userEvent.setup()
+    useCwdStore.getState().addCwd('proj', '/projects/myapp')
+
+    let capturedBody: unknown
+    server.use(
+      http.get(`${BASE}/workflows`, () => HttpResponse.json({ workflows: [] })),
+      http.post(`${BASE}/runs`, async ({ request }) => {
+        capturedBody = await request.json()
+        return HttpResponse.json({ runId: 'run-both', slug: 'slug-both' })
+      }),
+    )
+
+    renderForm()
+
+    const path = await screen.findByLabelText(/workflow path/i)
+    await user.type(path, '/projects/myapp/workflows/wf.json')
+    await user.type(screen.getByLabelText(/branch/i), 'feature/x')
+    await user.type(screen.getByLabelText(/initial prompt/i), 'work on the auth bug')
+
+    await user.click(screen.getByRole('button', { name: /start run/i }))
+
+    await waitFor(() => {
+      expect(capturedBody).toEqual({
+        workflowPath: '/projects/myapp/workflows/wf.json',
+        cwd: '/projects/myapp',
+        branch: 'feature/x',
+        initialPrompt: 'work on the auth bug',
+      })
+    })
+  })
+})
+
+// ─── Integration: start with prompt → navigates to run view ─────────────────
+
+describe('StartRunForm — integration: start with prompt navigates', () => {
+  test('filling the prompt and starting calls startRun with it and navigates to the run view', async () => {
+    const user = userEvent.setup()
+    useCwdStore.getState().addCwd('proj', '/p')
+
+    let capturedBody: unknown
+    server.use(
+      http.get(`${BASE}/workflows`, () => HttpResponse.json({ workflows: [] })),
+      http.post(`${BASE}/runs`, async ({ request }) => {
+        capturedBody = await request.json()
+        return HttpResponse.json({ runId: 'run-nav', slug: 'slug-nav' })
+      }),
+    )
+
+    const { router } = renderForm()
+
+    const path = await screen.findByLabelText(/workflow path/i)
+    await user.type(path, '/p/workflows/wf.json')
+    await user.type(screen.getByLabelText(/initial prompt/i), 'ship it')
+    await user.click(screen.getByRole('button', { name: /start run/i }))
+
+    expect(await screen.findByTestId('run-view-page')).toBeInTheDocument()
+    expect(router.state.location.pathname).toBe('/runs/run-nav')
+    expect(capturedBody).toEqual({
+      workflowPath: '/p/workflows/wf.json',
+      cwd: '/p',
+      initialPrompt: 'ship it',
+    })
+  })
+})
+
 // ─── Integration: isolation start errors ────────────────────────────────────
 
 describe('StartRunForm — isolation start errors', () => {

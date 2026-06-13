@@ -198,6 +198,9 @@ const RunDetailSchema = z.object({
   // carries them through to the run-detail view (z.object strips unknown keys).
   worktreePath: z.string().optional(),
   branch: z.string().optional(),
+  // The prompt the run was started with (ADR-003); carried through the snapshot
+  // frame so the run view can show it (z.object strips unknown keys).
+  initialPrompt: z.string().optional(),
   status: RunStatusSchema,
   currentStepId: z.string().nullable(),
   visitedStepIds: z.array(z.string()),

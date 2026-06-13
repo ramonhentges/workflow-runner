@@ -34,7 +34,9 @@ async function apiFetch<T>(
   } = {},
 ): Promise<T> {
   const base = getApiBaseUrl()
-  const url = new URL(path, base)
+  // The HTTP API is mounted under /api on the daemon; callers pass a
+  // leading-slash resource path (e.g. "/runs/:id") and we prefix it here.
+  const url = new URL(`/api${path}`, base)
   if (opts.params) {
     for (const [k, v] of Object.entries(opts.params)) {
       if (v !== undefined) {

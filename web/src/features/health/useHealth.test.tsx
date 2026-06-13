@@ -7,7 +7,7 @@ import { server } from '../../../test/setup'
 import { useHealth } from './useHealth'
 import type { HealthReport } from '@/lib/api/types'
 
-const BASE = 'http://127.0.0.1:4517'
+const BASE = 'http://127.0.0.1:4517/api'
 
 function makeWrapper() {
   const queryClient = new QueryClient({

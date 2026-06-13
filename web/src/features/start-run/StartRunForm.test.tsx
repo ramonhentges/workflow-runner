@@ -19,7 +19,7 @@ import { StartRunForm } from './StartRunForm'
 import { useWorkflows } from './useWorkflows'
 import { RunView } from '../run-view/RunView'
 
-const BASE = 'http://127.0.0.1:4517'
+const BASE = 'http://127.0.0.1:4517/api'
 
 function makeQueryClient() {
   return new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })

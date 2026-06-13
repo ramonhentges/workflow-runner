@@ -14,8 +14,10 @@ describe('getApiBaseUrl', () => {
     }
   })
 
-  test('returns default URL when VITE_API_BASE_URL is not set', () => {
+  test('falls back to the page origin (same-origin) when VITE_API_BASE_URL is not set', () => {
     delete env.VITE_API_BASE_URL
+    // jsdom origin is pinned to http://127.0.0.1:4517 in vite.config.ts.
+    expect(getApiBaseUrl()).toBe(window.location.origin)
     expect(getApiBaseUrl()).toBe('http://127.0.0.1:4517')
   })
 

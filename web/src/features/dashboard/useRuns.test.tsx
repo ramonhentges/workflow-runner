@@ -8,7 +8,7 @@ import { useCwdStore } from '@/stores/cwd-store'
 import { useRuns } from './useRuns'
 import type { RunSummary } from '@/lib/api/types'
 
-const BASE = 'http://127.0.0.1:4517'
+const BASE = 'http://127.0.0.1:4517/api'
 
 function makeWrapper() {
   const queryClient = new QueryClient({

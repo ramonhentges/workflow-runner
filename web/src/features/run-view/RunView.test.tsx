@@ -9,7 +9,7 @@ import { StepProgress } from './StepProgress'
 import { RunControls } from './RunControls'
 import { RunView } from './RunView'
 
-const BASE = 'http://127.0.0.1:4517'
+const BASE = 'http://127.0.0.1:4517/api'
 
 beforeAll(() => {
   // jsdom does not implement scrollIntoView

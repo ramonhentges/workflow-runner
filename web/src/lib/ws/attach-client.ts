@@ -78,8 +78,8 @@ export function openAttach(runId: string, baseWsUrl: string): AttachClient {
 
   function connect() {
     const url = lastSeq > 0
-      ? `${baseWsUrl}/runs/${encodeURIComponent(runId)}/attach?fromSeq=${lastSeq}`
-      : `${baseWsUrl}/runs/${encodeURIComponent(runId)}/attach`
+      ? `${baseWsUrl}/api/runs/${encodeURIComponent(runId)}/attach?fromSeq=${lastSeq}`
+      : `${baseWsUrl}/api/runs/${encodeURIComponent(runId)}/attach`
     const socket = new WebSocket(url)
     ws = socket
 

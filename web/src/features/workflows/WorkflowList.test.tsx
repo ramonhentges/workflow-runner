@@ -18,7 +18,7 @@ import { WorkflowList } from './WorkflowList'
 import { useWorkflowList } from './useWorkflowList'
 import type { WorkflowItem } from '@/lib/api/types'
 
-const BASE = 'http://127.0.0.1:4517'
+const BASE = 'http://127.0.0.1:4517/api'
 
 function makeQueryClient() {
   return new QueryClient({

@@ -97,7 +97,7 @@ function makeRunDetail() {
 describe('openAttach', () => {
   test('opens WebSocket at the correct URL', () => {
     openAttach(RUN_ID, BASE_URL)
-    expect(latestWs().url).toBe(`${BASE_URL}/runs/${RUN_ID}/attach`)
+    expect(latestWs().url).toBe(`${BASE_URL}/api/runs/${RUN_ID}/attach`)
   })
 
   test('subscribe immediately emits the current (initial) model', () => {
@@ -334,7 +334,7 @@ describe('auto-reconnect', () => {
     // Backoff elapses → a new socket opens, resuming from the last seq.
     vi.advanceTimersByTime(250)
     expect(FakeWebSocket.instances).toHaveLength(2)
-    expect(latestWs().url).toBe(`${BASE_URL}/runs/${RUN_ID}/attach?fromSeq=5`)
+    expect(latestWs().url).toBe(`${BASE_URL}/api/runs/${RUN_ID}/attach?fromSeq=5`)
 
     // The resumed socket keeps feeding the same model.
     latestWs().receive({

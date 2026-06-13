@@ -15,6 +15,8 @@ export interface StartDeps {
   stdout?: { write(s: string): void };
   stderr?: { write(s: string): void };
   attach?: (client: DaemonClient, runId: RunId) => Promise<number>;
+  readStdin?: () => Promise<string>;
+  readFile?: (path: string) => Promise<string>;
 }
 
 export async function run(argv: string[], deps: StartDeps = {}): Promise<number> {
@@ -23,6 +25,8 @@ export async function run(argv: string[], deps: StartDeps = {}): Promise<number>
   const isTty = deps.isTty ?? (() => Boolean(process.stdout.isTTY));
   const connectFn = deps.connect ?? defaultConnect;
   const attachFn = deps.attach ?? attachLoop;
+  const readStdin = deps.readStdin ?? (() => Bun.stdin.text());
+  const readFile = deps.readFile ?? ((path: string) => Bun.file(path).text());
 
   const parsed = parseStartArgs(argv);
   if (!parsed.ok) {
@@ -33,7 +37,19 @@ export async function run(argv: string[], deps: StartDeps = {}): Promise<number>
     stdout.write(`${USAGE.start}\n`);
     return 0;
   }
-  const { workflowPath, detach, branch } = parsed.value;
+  const { workflowPath, detach, branch, initialPrompt: promptArg } = parsed.value;
+
+  let initialPrompt: string | undefined;
+  if (promptArg !== undefined) {
+    try {
+      initialPrompt = await resolvePrompt(promptArg, readStdin, readFile);
+    } catch (err) {
+      stderr.write(
+        `workflow-runner: ${err instanceof Error ? err.message : String(err)}\n`,
+      );
+      return 1;
+    }
+  }
 
   let client: DaemonClient;
   try {
@@ -51,6 +67,7 @@ export async function run(argv: string[], deps: StartDeps = {}): Promise<number>
       workflowPath,
       cwd: process.cwd(),
       ...(branch !== undefined ? { branch } : {}),
+      ...(initialPrompt !== undefined ? { initialPrompt } : {}),
     });
   } catch (err) {
     stderr.write(`workflow-runner: ${formatStartError(err)}\n`);
@@ -70,6 +87,18 @@ export async function run(argv: string[], deps: StartDeps = {}): Promise<number>
   } finally {
     await client.close();
   }
+}
+
+// Resolves the raw --prompt flag value into the prompt text: "-" reads stdin,
+// "@<path>" reads a file, anything else is inline text.
+async function resolvePrompt(
+  raw: string,
+  readStdin: () => Promise<string>,
+  readFile: (path: string) => Promise<string>,
+): Promise<string> {
+  if (raw === "-") return readStdin();
+  if (raw.startsWith("@")) return readFile(raw.slice(1));
+  return raw;
 }
 
 function formatStartError(err: unknown): string {

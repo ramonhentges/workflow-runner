@@ -11,6 +11,7 @@ import {
 import { generateRunId, generateSlug, parseIdentifier } from "../../domain/run-id.js";
 import {
   Runner,
+  type EntryInboundKind,
   type RunnerAgentSessionFactory,
   type RunnerEvent,
   type RunnerObserver,
@@ -153,6 +154,7 @@ export class RunManager {
     workflowPath: string,
     cwd: string,
     branch?: string,
+    initialPrompt?: string,
   ): Promise<{ runId: RunId; slug: RunSlug }> {
     if (!isAbsolute(cwd)) {
       throw new RunManagerError("CWD_INVALID", `cwd must be an absolute path: ${cwd}`);
@@ -166,6 +168,15 @@ export class RunManager {
     if (!cwdStat.isDirectory()) {
       throw new RunManagerError("CWD_INVALID", `cwd is not a directory: ${cwd}`);
     }
+
+    // Normalize a blank/whitespace prompt to "absent" at the single server
+    // chokepoint both the HTTP route and the RPC handler funnel through, so an
+    // empty/whitespace value that slips past the surfaces (`--prompt ""`, an
+    // empty `@file`, blank stdin, or a bare zod string) cannot leak onto the
+    // snapshot or frame a degenerate "User request for this run: " kickoff. With
+    // a blank or omitted prompt this keeps the run byte-for-byte equivalent to
+    // the no-prompt path (ADR-003); the web surfaces already trim-and-drop.
+    const prompt = initialPrompt?.trim() || undefined;
 
     if (this.#activeRunCount() >= this.#runLimit) {
       throw new RunManagerError(
@@ -236,7 +247,15 @@ export class RunManager {
       return s.id === runId || s.slug === slug;
     }));
 
-    const run = Run.create({ id: runId, slug, workflowPath, cwd, worktreePath, branch });
+    const run = Run.create({
+      id: runId,
+      slug,
+      workflowPath,
+      cwd,
+      worktreePath,
+      branch,
+      initialPrompt: prompt,
+    });
     const runDir = join(this.#store.runsRoot, runId);
 
     // Reserve the slot synchronously before any I/O so a concurrent startRun
@@ -303,7 +322,16 @@ export class RunManager {
     record.runner = runner;
     runner.addObserver(makeEventLogObserver(record, record.eventLog!));
 
-    record.runPromise = this.#launchRunner(runner, record, workflow.firstStepId());
+    // A fresh start delivers the optional initial prompt to the entry step as a
+    // "user-request" so its kickoff is framed as the user's request for the run.
+    // With no prompt, startInboundMessage is null and behavior is unchanged.
+    record.runPromise = this.#launchRunner(
+      runner,
+      record,
+      workflow.firstStepId(),
+      prompt ?? null,
+      "user-request",
+    );
 
     return { runId, slug };
   }
@@ -426,11 +454,14 @@ export class RunManager {
     record.runner = runner;
     runner.addObserver(makeEventLogObserver(record, eventLog));
 
+    // A retry re-enters the failed step with its in-flight handoff message, so
+    // the kickoff keeps the "Context from previous step" framing.
     record.runPromise = this.#launchRunner(
       runner,
       record,
       failedStepId,
       rawInboundMessage,
+      "handoff",
     );
 
     // After retryStep, status is back to "running"; notify any attached subscribers
@@ -577,9 +608,17 @@ export class RunManager {
     record: InternalRecord,
     startStepId: StepId,
     startInboundMessage?: string | null,
+    inboundKind: EntryInboundKind = "handoff",
   ): Promise<RunSummary> {
     try {
-      const summary = await runner.run(startStepId, startInboundMessage ?? null);
+      // The entry inbound is either a fresh start's initial prompt ("user-request")
+      // or a retry/resume handoff ("handoff"); the caller selects the kind. With no
+      // inbound message, behavior is byte-for-byte identical to today.
+      const startInbound =
+        startInboundMessage != null
+          ? { message: startInboundMessage, kind: inboundKind }
+          : null;
+      const summary = await runner.run(startStepId, startInbound);
 
       if (record.stopRequested) {
         try {

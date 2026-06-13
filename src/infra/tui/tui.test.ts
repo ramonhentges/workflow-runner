@@ -275,6 +275,123 @@ describe("Tui.setIsolation", () => {
   });
 });
 
+describe("Tui.showInitialPrompt", () => {
+  let renderer: TestRenderer;
+  let renderOnce: () => Promise<void>;
+  let captureCharFrame: () => string;
+
+  beforeEach(async () => {
+    const created = await createTestRenderer({ width: 80, height: 24 });
+    renderer = created.renderer;
+    renderOnce = created.renderOnce;
+    captureCharFrame = created.captureCharFrame;
+  });
+
+  afterEach(() => {
+    try {
+      renderer.destroy();
+    } catch {
+      // ignore
+    }
+  });
+
+  it("renders the prompt text as the opening transcript entry when present", async () => {
+    const tui = await makeTui(renderer);
+    tui.showInitialPrompt("review PR #42");
+    await renderOnce();
+
+    const frame = captureCharFrame();
+    expect(frame).toContain("> review PR #42");
+  });
+
+  it("renders no prompt entry when initialPrompt is absent (frame unchanged)", async () => {
+    const tui = await makeTui(renderer);
+    await renderOnce();
+    const before = captureCharFrame();
+
+    tui.showInitialPrompt(undefined);
+    await renderOnce();
+
+    expect(captureCharFrame()).toBe(before);
+  });
+
+  it("renders no prompt entry for an empty-string prompt (frame unchanged)", async () => {
+    const tui = await makeTui(renderer);
+    await renderOnce();
+    const before = captureCharFrame();
+
+    tui.showInitialPrompt("");
+    await renderOnce();
+
+    expect(captureCharFrame()).toBe(before);
+  });
+});
+
+describe("Tui attach-flow wiring (initialPrompt + isolation)", () => {
+  let renderer: TestRenderer;
+  let renderOnce: () => Promise<void>;
+  let captureCharFrame: () => string;
+
+  beforeEach(async () => {
+    const created = await createTestRenderer({ width: 80, height: 24 });
+    renderer = created.renderer;
+    renderOnce = created.renderOnce;
+    captureCharFrame = created.captureCharFrame;
+  });
+
+  afterEach(() => {
+    try {
+      renderer.destroy();
+    } catch {
+      // ignore
+    }
+  });
+
+  // Replicates the attach loop's wiring order (setIsolation -> showInitialPrompt
+  // -> attachSource) since `_attach-loop.ts` itself is excluded from unit
+  // coverage (it boots a real @opentui terminal renderer).
+  it("shows the prompt as the opening entry above backlog, with isolation in the header", async () => {
+    const tui = await makeTui(renderer);
+    const initialSnapshot = {
+      branch: "feat/iso",
+      worktreePath: "/tmp/wt-iso",
+      initialPrompt: "ship the initial prompt feature",
+    };
+
+    tui.setIsolation(initialSnapshot);
+    tui.showInitialPrompt(initialSnapshot.initialPrompt);
+
+    const source = makeFakeSource();
+    tui.attachSource(source);
+    source.emit({ type: "log", message: "first backlog line" });
+    await renderOnce();
+
+    const frame = captureCharFrame();
+    expect(frame).toContain("> ship the initial prompt feature");
+    expect(frame).toContain("branch feat/iso");
+    expect(frame).toContain("worktree /tmp/wt-iso");
+    // Opening entry: the prompt precedes replayed backlog in the transcript.
+    expect(frame.indexOf("> ship the initial prompt feature")).toBeLessThan(
+      frame.indexOf("first backlog line"),
+    );
+  });
+
+  it("leaves the transcript empty when the snapshot has no initialPrompt", async () => {
+    const tui = await makeTui(renderer);
+    const initialSnapshot: { branch?: string; initialPrompt?: string } = {
+      branch: "feat/iso",
+    };
+
+    tui.setIsolation(initialSnapshot);
+    tui.showInitialPrompt(initialSnapshot.initialPrompt);
+    await renderOnce();
+
+    const frame = captureCharFrame();
+    expect(frame).toContain("branch feat/iso");
+    expect(frame).not.toContain(">");
+  });
+});
+
 describe("Tui.submitInput", () => {
   let renderer: TestRenderer;
 

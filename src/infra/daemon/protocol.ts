@@ -33,7 +33,7 @@ export interface RunListEntry {
 
 export interface RpcMethods {
   "run.start": {
-    params: { workflowPath: string; cwd: string; branch?: string };
+    params: { workflowPath: string; cwd: string; branch?: string; initialPrompt?: string };
     result: { runId: RunId; slug: RunSlug };
   };
   "run.ps": {

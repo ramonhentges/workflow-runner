@@ -445,4 +445,57 @@ describe("WS /runs/:id/attach — integration: live tail", () => {
     },
     15000,
   );
+
+  it(
+    "forwards initialPrompt on the snapshot frame when the run was started with one",
+    async () => {
+      const tempDir = mkdtempSync(join(tmpdir(), "ws-live-prompt-"));
+      const storageRoot = join(tempDir, "workflow-runner");
+      mkdirSync(storageRoot, { recursive: true });
+
+      const factory = new FixtureSessionFactory();
+      const manager = new RunManager(storageRoot, factory);
+      let server: TestServer | null = null;
+
+      let runId: string | null = null;
+      try {
+        const wfPath = join(storageRoot, "wf.json");
+        await Bun.write(wfPath, makeWorkflowJson("live-prompt", "fake:hang"));
+
+        const result = await manager.startRun(
+          wfPath,
+          storageRoot,
+          undefined,
+          "review PR #42",
+        );
+        runId = result.runId;
+
+        await new Promise((r) => setTimeout(r, 200));
+
+        server = startTestServer(manager);
+
+        const frames = await collectNFrames(
+          `ws://127.0.0.1:${server.port}/runs/${runId}/attach`,
+          2,
+          4000,
+        );
+
+        const snapshotFrame = frames.find((f) => f.type === "snapshot");
+        expect(snapshotFrame?.type).toBe("snapshot");
+        if (snapshotFrame?.type === "snapshot") {
+          expect(snapshotFrame.snapshot.initialPrompt).toBe("review PR #42");
+        }
+      } finally {
+        if (runId !== null) {
+          try {
+            await manager.stop(runId as never);
+          } catch {}
+        }
+        server?.stop();
+        await manager.shutdown();
+        await rm(tempDir, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+    15000,
+  );
 });

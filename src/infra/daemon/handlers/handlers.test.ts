@@ -146,6 +146,53 @@ describe("createRunStartHandler", () => {
     expect(startRunCalls[0]!.branch).toBeUndefined();
   });
 
+  it("forwards a provided initialPrompt to RunManager.startRun", async () => {
+    const expected = { runId: asRunId("abc12345"), slug: asRunSlug("brave-otter") };
+    const startRunCalls: Array<{ branch?: string; initialPrompt?: string }> = [];
+    const rm = {
+      startRun: async (
+        _path: string,
+        _cwd: string,
+        branch?: string,
+        initialPrompt?: string,
+      ) => {
+        startRunCalls.push({ branch, initialPrompt });
+        return expected;
+      },
+    } as unknown as RunManager;
+
+    const handler = createRunStartHandler(rm);
+    await handler(
+      { workflowPath: "/tmp/wf.json", cwd: "/my/project", initialPrompt: "review PR #42" },
+      noopCtx,
+    );
+
+    expect(startRunCalls).toHaveLength(1);
+    expect(startRunCalls[0]!.initialPrompt).toBe("review PR #42");
+  });
+
+  it("forwards undefined initialPrompt when omitted (no behavior change)", async () => {
+    const expected = { runId: asRunId("abc12345"), slug: asRunSlug("brave-otter") };
+    const startRunCalls: Array<{ initialPrompt?: string }> = [];
+    const rm = {
+      startRun: async (
+        _path: string,
+        _cwd: string,
+        _branch?: string,
+        initialPrompt?: string,
+      ) => {
+        startRunCalls.push({ initialPrompt });
+        return expected;
+      },
+    } as unknown as RunManager;
+
+    const handler = createRunStartHandler(rm);
+    await handler({ workflowPath: "/tmp/wf.json", cwd: "/my/project" }, noopCtx);
+
+    expect(startRunCalls).toHaveLength(1);
+    expect(startRunCalls[0]!.initialPrompt).toBeUndefined();
+  });
+
   it("maps RunManagerError(NOT_A_GIT_REPO) to the NOT_A_GIT_REPO RPC error", async () => {
     const rm = {
       startRun: async () => {

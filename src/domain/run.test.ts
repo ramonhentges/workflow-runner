@@ -103,6 +103,32 @@ describe("Run", () => {
     expect("branch" in snapshot).toBe(false);
   });
 
+  it("omits initialPrompt when created without it", () => {
+    const snapshot = Run.create(baseArgs).snapshot();
+
+    expect(snapshot.initialPrompt).toBeUndefined();
+    expect("initialPrompt" in snapshot).toBe(false);
+  });
+
+  it("emits and round-trips initialPrompt when created with it", () => {
+    const original = Run.create({ ...baseArgs, initialPrompt: "review PR #42" });
+
+    expect(original.snapshot().initialPrompt).toBe("review PR #42");
+
+    const restored = Run.fromSnapshot(original.snapshot());
+
+    expect(restored.snapshot()).toEqual(original.snapshot());
+    expect(restored.snapshot().initialPrompt).toBe("review PR #42");
+  });
+
+  it("keeps initialPrompt absent across a round-trip when unset", () => {
+    const original = Run.create(baseArgs);
+
+    const restored = Run.fromSnapshot(original.snapshot());
+
+    expect("initialPrompt" in restored.snapshot()).toBe(false);
+  });
+
   it("round-trips through snapshot and fromSnapshot", () => {
     const original = Run.create(baseArgs);
     original.markStepEntered(asStepId("step-1"), "prompt-A");

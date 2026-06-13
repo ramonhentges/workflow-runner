@@ -292,6 +292,38 @@ describe("GET /runs/:id — integration (real RunManager)", () => {
     }
   });
 
+  it("exposes initialPrompt for a run started with one, and omits it otherwise", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "run-detail-it-"));
+    const storageRoot = join(tempDir, "workflow-runner");
+    mkdirSync(storageRoot, { recursive: true });
+
+    const factory = new FixtureSessionFactory();
+    const manager = new RunManager(storageRoot, factory);
+    try {
+      const wfPath = join(storageRoot, "test.json");
+      await Bun.write(wfPath, makeWorkflowJson("detail-prompt", "fake:hang"));
+
+      const app = createApiApp(manager);
+
+      // Started with a prompt → initialPrompt is present in RunDetail.
+      const withPrompt = await manager.startRun(wfPath, storageRoot, undefined, "review PR #42");
+      const withRes = await app.request(`/runs/${withPrompt.runId}`);
+      expect(withRes.status).toBe(200);
+      const withBody = await withRes.json() as Record<string, unknown>;
+      expect(withBody.initialPrompt).toBe("review PR #42");
+
+      // Started without a prompt → initialPrompt is absent.
+      const noPrompt = await manager.startRun(wfPath, storageRoot);
+      const noRes = await app.request(`/runs/${noPrompt.runId}`);
+      expect(noRes.status).toBe(200);
+      const noBody = await noRes.json() as Record<string, unknown>;
+      expect(noBody.initialPrompt).toBeUndefined();
+    } finally {
+      await manager.shutdown();
+      await rm(tempDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
   it("returns 404 for a run that does not exist", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "run-detail-it-"));
     const storageRoot = join(tempDir, "workflow-runner");

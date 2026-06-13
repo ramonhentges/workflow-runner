@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
 import {
   Select,
   SelectContent,
@@ -34,6 +35,7 @@ export function StartRunForm() {
   const [selectedPath, setSelectedPath] = useState('')
   const [manualPath, setManualPath] = useState('')
   const [branch, setBranch] = useState('')
+  const [initialPrompt, setInitialPrompt] = useState('')
   const [validationError, setValidationError] = useState('')
 
   const { data: workflowsData, isLoading: workflowsLoading, isError: workflowsError } = useWorkflows()
@@ -71,10 +73,15 @@ export function StartRunForm() {
     // A non-empty branch opts the run into git-worktree isolation (ADR-001);
     // leaving it blank starts a normal run in the active cwd.
     const trimmedBranch = branch.trim()
+    // An optional initial prompt directs the first step's agent (ADR-001). Shape
+    // it into the request only when non-empty, exactly like `branch`, so a blank
+    // prompt keeps the no-prompt request byte-for-byte identical to today.
+    const trimmedPrompt = initialPrompt.trim()
     const req: StartRunRequest = {
       workflowPath,
       cwd: activeCwd!.path,
       ...(trimmedBranch ? { branch: trimmedBranch } : {}),
+      ...(trimmedPrompt ? { initialPrompt: trimmedPrompt } : {}),
     }
     mutation.mutate(req)
   }
@@ -162,6 +169,24 @@ export function StartRunForm() {
             <p className="text-xs text-muted-foreground">
               Run in an isolated git worktree on this branch. Leave blank to run in the working
               directory.
+            </p>
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="initial-prompt-input">Initial prompt (optional)</Label>
+            <Textarea
+              id="initial-prompt-input"
+              value={initialPrompt}
+              onChange={e => {
+                setInitialPrompt(e.target.value)
+                setValidationError('')
+              }}
+              placeholder="e.g. review PR #42"
+              rows={3}
+            />
+            <p className="text-xs text-muted-foreground">
+              Sent to the first step's agent as a user request for this run. Leave blank to start
+              the workflow as-is.
             </p>
           </div>
 

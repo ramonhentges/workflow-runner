@@ -462,6 +462,7 @@ export function createPerConnectionState(
           startedAt: snapshot.startedAt,
           endedAt: snapshot.endedAt,
           attachedCount: active.subscribers.size,
+          initialPrompt: snapshot.initialPrompt,
         },
       });
 

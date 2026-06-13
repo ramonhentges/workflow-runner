@@ -405,6 +405,105 @@ describe('WorkflowList run flow', () => {
     })
   })
 
+  test('forwards a filled initialPrompt (trimmed) through the start mutation', async () => {
+    const user = userEvent.setup()
+    useCwdStore.getState().addCwd('proj', '/p')
+    let startBody: unknown = null
+
+    server.use(
+      http.get(`${BASE}/workflows`, () =>
+        HttpResponse.json({
+          workflows: [{ name: 'alpha.json', path: '/p/workflows/alpha.json' }],
+        }),
+      ),
+      http.post(`${BASE}/runs`, async ({ request }) => {
+        startBody = await request.json()
+        return HttpResponse.json({ runId: 'run-p', slug: 'alpha-run' })
+      }),
+    )
+
+    renderWorkflowList()
+
+    const row = await screen.findByTestId('workflow-row-alpha')
+    await user.click(within(row).getByRole('button', { name: 'Run' }))
+    const dialog = await screen.findByTestId('run-dialog')
+    await user.type(within(dialog).getByLabelText(/initial prompt/i), '  review PR #42  ')
+    await user.click(within(dialog).getByRole('button', { name: 'Start run' }))
+
+    await screen.findByTestId('run-page')
+    expect(startBody).toEqual({
+      workflowPath: '/p/workflows/alpha.json',
+      cwd: '/p',
+      initialPrompt: 'review PR #42',
+    })
+  })
+
+  test('omits initialPrompt when the prompt textarea is left blank', async () => {
+    const user = userEvent.setup()
+    useCwdStore.getState().addCwd('proj', '/p')
+    let startBody: unknown = null
+
+    server.use(
+      http.get(`${BASE}/workflows`, () =>
+        HttpResponse.json({
+          workflows: [{ name: 'alpha.json', path: '/p/workflows/alpha.json' }],
+        }),
+      ),
+      http.post(`${BASE}/runs`, async ({ request }) => {
+        startBody = await request.json()
+        return HttpResponse.json({ runId: 'run-blank', slug: 'alpha-run' })
+      }),
+    )
+
+    renderWorkflowList()
+
+    const row = await screen.findByTestId('workflow-row-alpha')
+    await user.click(within(row).getByRole('button', { name: 'Run' }))
+    const dialog = await screen.findByTestId('run-dialog')
+    // Prompt textarea is present but left empty.
+    expect(within(dialog).getByLabelText(/initial prompt/i)).toBeInTheDocument()
+    await user.click(within(dialog).getByRole('button', { name: 'Start run' }))
+
+    await screen.findByTestId('run-page')
+    // Blank prompt ⇒ no `initialPrompt` key ⇒ byte-for-byte identical to today.
+    expect(startBody).toEqual({ workflowPath: '/p/workflows/alpha.json', cwd: '/p' })
+  })
+
+  test('forwards both branch and initialPrompt together when both are filled', async () => {
+    const user = userEvent.setup()
+    useCwdStore.getState().addCwd('proj', '/p')
+    let startBody: unknown = null
+
+    server.use(
+      http.get(`${BASE}/workflows`, () =>
+        HttpResponse.json({
+          workflows: [{ name: 'alpha.json', path: '/p/workflows/alpha.json' }],
+        }),
+      ),
+      http.post(`${BASE}/runs`, async ({ request }) => {
+        startBody = await request.json()
+        return HttpResponse.json({ runId: 'run-both', slug: 'alpha-run' })
+      }),
+    )
+
+    renderWorkflowList()
+
+    const row = await screen.findByTestId('workflow-row-alpha')
+    await user.click(within(row).getByRole('button', { name: 'Run' }))
+    const dialog = await screen.findByTestId('run-dialog')
+    await user.type(within(dialog).getByLabelText(/branch/i), 'feature/iso')
+    await user.type(within(dialog).getByLabelText(/initial prompt/i), 'fix the bug')
+    await user.click(within(dialog).getByRole('button', { name: 'Start run' }))
+
+    await screen.findByTestId('run-page')
+    expect(startBody).toEqual({
+      workflowPath: '/p/workflows/alpha.json',
+      cwd: '/p',
+      branch: 'feature/iso',
+      initialPrompt: 'fix the bug',
+    })
+  })
+
   test('a failed start shows an error in the dialog and keeps the row', async () => {
     const user = userEvent.setup()
     useCwdStore.getState().addCwd('proj', '/p')

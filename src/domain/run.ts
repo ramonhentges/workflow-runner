@@ -20,6 +20,7 @@ export interface RunSnapshot {
   cwd?: string;
   worktreePath?: string;
   branch?: string;
+  initialPrompt?: string;
   status: RunStatus;
   currentStepId: StepId | null;
   visitedStepIds: StepId[];
@@ -44,6 +45,7 @@ export class Run {
   #cwd: string | undefined;
   #worktreePath: string | undefined;
   #branch: string | undefined;
+  #initialPrompt: string | undefined;
   #status: RunStatus;
   #currentStepId: StepId | null;
   #visitedStepIds: StepId[];
@@ -59,6 +61,7 @@ export class Run {
     this.#cwd = snap.cwd;
     this.#worktreePath = snap.worktreePath;
     this.#branch = snap.branch;
+    this.#initialPrompt = snap.initialPrompt;
     this.#status = snap.status;
     this.#currentStepId = snap.currentStepId;
     this.#visitedStepIds = [...snap.visitedStepIds];
@@ -75,6 +78,7 @@ export class Run {
     cwd?: string;
     worktreePath?: string;
     branch?: string;
+    initialPrompt?: string;
   }): Run {
     return new Run({
       id: args.id,
@@ -83,6 +87,7 @@ export class Run {
       cwd: args.cwd,
       worktreePath: args.worktreePath,
       branch: args.branch,
+      initialPrompt: args.initialPrompt,
       status: "running",
       currentStepId: null,
       visitedStepIds: [],
@@ -116,6 +121,9 @@ export class Run {
     }
     if (this.#branch !== undefined) {
       snap.branch = this.#branch;
+    }
+    if (this.#initialPrompt !== undefined) {
+      snap.initialPrompt = this.#initialPrompt;
     }
     if (this.#endReason !== undefined) {
       snap.endReason = this.#endReason;

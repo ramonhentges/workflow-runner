@@ -15,7 +15,7 @@ import { asRunId, asRunSlug } from "../../../domain/run.js";
 // Helpers
 // ---------------------------------------------------------------------------
 
-type StartRunFn = (workflowPath: string, cwd: string, branch?: string) => Promise<{ runId: ReturnType<typeof asRunId>; slug: ReturnType<typeof asRunSlug> }>;
+type StartRunFn = (workflowPath: string, cwd: string, branch?: string, initialPrompt?: string) => Promise<{ runId: ReturnType<typeof asRunId>; slug: ReturnType<typeof asRunSlug> }>;
 
 function makeRm(startRunImpl: StartRunFn): RunManager {
   return {
@@ -123,6 +123,59 @@ describe("POST /runs — unit", () => {
     });
 
     expect(capturedBranch).toBeUndefined();
+  });
+
+  it("forwards the initialPrompt from the body to startRun", async () => {
+    let capturedPrompt: string | undefined = "UNSET";
+
+    const rm = makeRm(async (_wp: string, _c: string, _b?: string, p?: string) => {
+      capturedPrompt = p;
+      return { runId: asRunId("run001"), slug: asRunSlug("brave-otter") };
+    });
+
+    const app = createApiApp(rm);
+    await postRuns(app, {
+      workflowPath: "/workspace/workflow.json",
+      cwd: "/workspace/myproject",
+      initialPrompt: "do X",
+    });
+
+    expect(capturedPrompt).toBe("do X");
+  });
+
+  it("forwards undefined initialPrompt when the body omits it (behavior unchanged)", async () => {
+    let capturedPrompt: string | undefined = "UNSET";
+
+    const rm = makeRm(async (_wp: string, _c: string, _b?: string, p?: string) => {
+      capturedPrompt = p;
+      return { runId: asRunId("run001"), slug: asRunSlug("brave-otter") };
+    });
+
+    const app = createApiApp(rm);
+    await postRuns(app, {
+      workflowPath: "/workspace/workflow.json",
+      cwd: "/workspace/myproject",
+    });
+
+    expect(capturedPrompt).toBeUndefined();
+  });
+
+  it("returns 400 when initialPrompt is not a string", async () => {
+    let startRunCalled = false;
+    const rm = makeRm(async () => {
+      startRunCalled = true;
+      return { runId: asRunId("run001"), slug: asRunSlug("slug") };
+    });
+    const app = createApiApp(rm);
+
+    const res = await postRuns(app, {
+      workflowPath: "/tmp/wf.json",
+      cwd: "/tmp/project",
+      initialPrompt: 42,
+    });
+
+    expect(res.status).toBe(400);
+    expect(startRunCalled).toBe(false);
   });
 
   it("returns 400 when branch is an empty string", async () => {

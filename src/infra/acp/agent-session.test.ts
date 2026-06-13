@@ -89,7 +89,7 @@ describe("IdeDispatchSessionFactory", () => {
         step: makeStep({ ide: "claude-code" }),
         cwd: "/tmp",
         tools: makeTools(),
-        inboundMessage: null,
+        inbound: null,
         sink: makeSink(),
       });
     } catch {
@@ -122,7 +122,7 @@ describe("IdeDispatchSessionFactory", () => {
         step: makeStep({ ide: "codex" }),
         cwd: "/tmp",
         tools: makeTools(),
-        inboundMessage: null,
+        inbound: null,
         sink: makeSink(),
       });
     } catch {
@@ -160,7 +160,7 @@ describe("IdeDispatchSessionFactory", () => {
         step: makeStep({ ide: "opencode" }),
         cwd: "/tmp",
         tools: makeTools(),
-        inboundMessage: null,
+        inbound: null,
         sink: makeSink(),
       });
     } catch {
@@ -188,7 +188,7 @@ describe("IdeDispatchSessionFactory", () => {
         step: makeStep({ ide: "ghost-agent" }),
         cwd: "/tmp",
         tools: makeTools(),
-        inboundMessage: null,
+        inbound: null,
         sink: makeSink(),
       });
     } catch (e) {
@@ -209,7 +209,7 @@ describe("IdeDispatchSessionFactory", () => {
         step: makeStep({ ide: "" }),
         cwd: "/tmp",
         tools: makeTools(),
-        inboundMessage: null,
+        inbound: null,
         sink: makeSink(),
       });
     } catch (e) {
@@ -271,7 +271,7 @@ describe("IdeDispatchSessionFactory (gemini)", () => {
         step: makeStep({ ide: "gemini" }),
         cwd: "/tmp",
         tools: makeTools(),
-        inboundMessage: null,
+        inbound: null,
         sink: makeSink(),
       });
     } catch {

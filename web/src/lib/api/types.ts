@@ -67,6 +67,10 @@ export interface RunDetail {
   // Present only for isolated runs (ADR-004).
   worktreePath?: string
   branch?: string
+  // The free-text prompt the run was started with (ADR-003). Present only when
+  // the run was launched with one; absent otherwise. Surfaced as run context in
+  // the run view, kept out of the compact `ps`/summary listing.
+  initialPrompt?: string
   status: RunStatus
   currentStepId: string | null
   visitedStepIds: string[]
@@ -93,6 +97,10 @@ export interface StartRunRequest {
   // Opt-in isolation (ADR-001): a non-empty branch requests a per-run git
   // worktree. Omitted ⇒ a normal, non-isolated run in `cwd`.
   branch?: string
+  // Optional free-text task message handed to the first step's agent as a
+  // "user request for this run" (ADR-001). Omitted ⇒ today's behavior; the
+  // first step receives only the workflow's static description.
+  initialPrompt?: string
 }
 
 // Scope discriminator mirroring the server `WorkflowScope` (src/app/api/schema.ts,

@@ -7,6 +7,9 @@ export interface StartArgs {
   workflowPath: string;
   detach: boolean;
   branch?: string;
+  // Raw flag value: "-" (stdin), "@<path>" (file), or inline text. Resolved to
+  // the actual prompt in commands/start.ts.
+  initialPrompt?: string;
 }
 
 export interface StopArgs {
@@ -39,7 +42,10 @@ export interface DaemonArgs {
 
 export const USAGE = {
   start:
-    "Usage: workflow-runner start <workflow.json> [--branch <name>] [--detach|-d]",
+    "Usage: workflow-runner start <workflow.json> [--branch <name>] [--prompt <text|-|@file>] [--detach|-d]\n" +
+    "  --prompt <text>   direct the run with inline text\n" +
+    "  --prompt -        read the prompt from stdin\n" +
+    "  --prompt @<file>  read the prompt from a file",
   stop: "Usage: workflow-runner stop <run-id>",
   retryStep: "Usage: workflow-runner retry-step <run-id>",
   ps: "Usage: workflow-runner ps [--all|-a]",
@@ -65,11 +71,32 @@ export function parseStartArgs(
   let workflowPath = "";
   let detach = false;
   let branch: string | undefined;
+  let initialPrompt: string | undefined;
   let i = 0;
   while (i < argv.length) {
     const arg = argv[i]!;
     if (arg === "--detach" || arg === "-d") {
       detach = true;
+      i++;
+      continue;
+    }
+    if (arg === "--prompt") {
+      const value = argv[i + 1];
+      // "-" is the stdin sentinel and is a valid value; any other token that
+      // looks like a flag means no value was supplied.
+      if (value === undefined || (value.startsWith("-") && value !== "-")) {
+        return { ok: false, error: "--prompt requires a value" };
+      }
+      initialPrompt = value;
+      i += 2;
+      continue;
+    }
+    if (arg.startsWith("--prompt=")) {
+      const value = arg.slice("--prompt=".length);
+      if (value === "") {
+        return { ok: false, error: "--prompt requires a value" };
+      }
+      initialPrompt = value;
       i++;
       continue;
     }
@@ -106,6 +133,7 @@ export function parseStartArgs(
   }
   const value: StartArgs = { workflowPath, detach };
   if (branch !== undefined) value.branch = branch;
+  if (initialPrompt !== undefined) value.initialPrompt = initialPrompt;
   return { ok: true, value };
 }
 

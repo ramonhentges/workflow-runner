@@ -15,7 +15,7 @@ import type { Socket, UnixSocketListener } from "bun";
 
 import type { RunnerAgentSessionFactory } from "../../domain/runner.js";
 import { IdeDispatchSessionFactory } from "../acp/agent-session.js";
-import { createApiApp } from "../../app/api/app.js";
+import { createServerApp } from "../../app/api/app.js";
 import { websocket, createWsConnectionRegistry } from "../../app/api/routes/ws-attach.js";
 import { DEFAULT_API_PORT } from "../../app/api/security.js";
 import type { DiscoveryFile } from "../../app/api/schema.js";
@@ -452,7 +452,7 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<void> {
     // signalling readiness via the UDS socket. This ordering guarantees that
     // when the harness/client sees the socket, daemon.json already exists.
     //
-    // Deferred fetch container: lets us pass the actual bound port to createApiApp
+    // Deferred fetch container: lets us pass the actual bound port to createServerApp
     // after Bun.serve returns (port 0 → OS-assigned; also needed for testing).
     // JavaScript is single-threaded so appFetch is always updated before any
     // HTTP request can be dispatched.
@@ -491,7 +491,7 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<void> {
 
     // Create the Hono app with the ACTUAL bound port so the allowlist is correct.
     const actualPort = apiServer.port ?? 0;
-    const app = createApiApp(runManager, actualPort, wsRegistry);
+    const app = createServerApp(runManager, actualPort, wsRegistry);
     appFetch = app.fetch as typeof appFetch;
 
     // Write discovery file (0600) before binding the UDS socket so that

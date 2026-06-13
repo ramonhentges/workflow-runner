@@ -12,6 +12,7 @@ import { registerWorkflowsRoute } from "./routes/workflows.js";
 import { registerWorkflowCrudRoutes } from "./routes/workflow-crud.js";
 import { registerIdeCatalogRoute, type IdeCatalogProbe } from "./routes/ide-catalog.js";
 import { hostAllowlistMiddleware, corsMiddleware } from "./security.js";
+import { registerWebUiRoutes } from "../../infra/daemon/web-ui/serve.js";
 
 export type ApiApp = OpenAPIHono;
 
@@ -71,4 +72,41 @@ export function createApiApp(
   registerWsAttachRoute(app, runManager, port, wsRegistry);
 
   return app;
+}
+
+/**
+ * Composes the full HTTP server: the JSON API mounted under `/api`, plus the
+ * embedded single-page web UI served at the root.
+ *
+ * Mounting the API under `/api` keeps root paths (`/runs/:id`, `/workflows`, …)
+ * free for the SPA's client-side routes, so a browser navigation resolves to
+ * the web page while `/api/runs/:id` resolves to JSON. The WebSocket attach
+ * endpoint becomes `/api/runs/:id/attach` and the OpenAPI doc `/api/openapi.json`.
+ *
+ * The loopback `Host` allowlist is applied at the root so it also guards the
+ * static web routes; it is idempotent, so the copy inside `createApiApp` on
+ * `/api/*` is harmless. CORS stays inside `createApiApp` (the only cross-origin
+ * surface) to avoid emitting duplicate CORS headers.
+ */
+export function createServerApp(
+  runManager: RunManager,
+  port?: number,
+  wsRegistry?: WsConnectionRegistry,
+  options: ApiAppOptions = {},
+): ApiApp {
+  const root = new OpenAPIHono();
+
+  if (port !== undefined) {
+    root.use("/*", hostAllowlistMiddleware(port));
+  }
+
+  const api = createApiApp(runManager, port, wsRegistry, options);
+  root.route("/api", api);
+
+  // Registered last: serves the embedded SPA (and its assets) for any non-API
+  // GET, with an index.html fallback for client-side routes. No-op unless a
+  // web UI was embedded at compile time.
+  registerWebUiRoutes(root);
+
+  return root;
 }

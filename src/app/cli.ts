@@ -35,6 +35,7 @@ export type DoctorArgs = Record<string, never>;
 
 export interface DaemonArgs {
   apiPort?: number;
+  storageRoot?: string;
 }
 
 export const USAGE = {
@@ -46,7 +47,9 @@ export const USAGE = {
   attach: "Usage: workflow-runner attach [<run-id>]",
   send: "Usage: workflow-runner send <run-id> <message|->",
   doctor: "Usage: workflow-runner doctor",
-  daemon: "Usage: workflow-runner daemon [--api-port <port>]",
+  daemon:
+    "Usage: workflow-runner daemon [start|stop|status|restart] [--api-port <port>] [--storage-root <path>]\n" +
+    "  (bare `daemon` runs the daemon in the foreground for diagnostics)",
 } as const;
 
 function isHelpFlag(arg: string): boolean {
@@ -210,9 +213,25 @@ export function parseDaemonArgs(
 ): ParseResult<DaemonArgs> {
   if (hasHelp(argv)) return { ok: true, help: true };
   let apiPort: number | undefined;
+  let storageRoot: string | undefined;
   let i = 0;
   while (i < argv.length) {
     const arg = argv[i]!;
+    if (arg === "--storage-root") {
+      i++;
+      const val = argv[i];
+      if (val === undefined) {
+        return { ok: false, error: "--storage-root requires a value" };
+      }
+      storageRoot = val;
+      i++;
+      continue;
+    }
+    if (arg.startsWith("--storage-root=")) {
+      storageRoot = arg.slice("--storage-root=".length);
+      i++;
+      continue;
+    }
     let portStr: string | undefined;
     if (arg === "--api-port") {
       i++;
@@ -233,5 +252,5 @@ export function parseDaemonArgs(
     }
     apiPort = n;
   }
-  return { ok: true, value: { apiPort } };
+  return { ok: true, value: { apiPort, storageRoot } };
 }

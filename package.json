@@ -13,7 +13,9 @@
   "scripts": {
     "dev": "bun src/index.ts daemon",
     "build": "bun build ./src/index.ts --outdir ./build --target=node && bun build ./src/infra/daemon/entry.ts --outfile ./build/daemon-entry.js --target=node",
-    "compile": "bun build --compile --target=bun-linux-x64-modern ./src/index.ts --outfile=bin/workflow-runner",
+    "build:web": "cd web && bun run build",
+    "gen:web-assets": "bun scripts/gen-web-assets.ts",
+    "compile": "bun run build:web && bun run gen:web-assets && bun build --compile --target=bun-linux-x64-modern ./src/index.ts --outfile=bin/workflow-runner && bun run gen:web-assets --stub",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "test:integration": "bun test src/infra/daemon/__tests__/integration/",

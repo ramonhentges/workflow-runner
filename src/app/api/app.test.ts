@@ -4,7 +4,7 @@ import {
   httpStatusForError,
   mapError,
 } from "./error-map.js";
-import { createApiApp } from "./app.js";
+import { createApiApp, createServerApp } from "./app.js";
 import { RunManagerError } from "../../infra/daemon/run-manager.js";
 import { WorkflowConfigError } from "../../domain/workflow.js";
 import { RpcErrorCode } from "../../infra/daemon/protocol.js";
@@ -191,5 +191,32 @@ describe("createApiApp", () => {
     const app = createApiApp(makePartialRm());
     // app.fetch is defined — it can be passed to Bun.serve without modification.
     expect(typeof app.fetch).toBe("function");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// createServerApp — API mounted under /api, web UI at the root
+// ---------------------------------------------------------------------------
+
+describe("createServerApp", () => {
+  it("serves the API under /api", async () => {
+    const app = createServerApp(makePartialRm());
+    expect((await app.request("/api/health")).status).toBe(200);
+    expect((await app.request("/api/openapi.json")).status).toBe(200);
+  });
+
+  it("no longer serves the API at the bare root path", async () => {
+    // Root paths now belong to the web SPA; /health is reachable only via /api.
+    const app = createServerApp(makePartialRm());
+    expect((await app.request("/health")).status).toBe(404);
+  });
+
+  it("an unmatched /api path returns 404 (never the SPA)", async () => {
+    const app = createServerApp(makePartialRm());
+    const res = await app.request("/api/nope", {
+      headers: { Accept: "text/html" },
+    });
+    expect(res.status).toBe(404);
+    expect(res.headers.get("Content-Type") ?? "").not.toContain("text/html");
   });
 });

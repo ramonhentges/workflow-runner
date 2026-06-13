@@ -182,15 +182,29 @@ describe("buildKickoffPrompt", () => {
 
   it("appends inbound context after description when present", () => {
     const step = stepShape("test", { mode: "interactive", description: "Do the thing" });
-    const result = buildKickoffPrompt(step, "Previous result");
+    const result = buildKickoffPrompt(step, { message: "Previous result", kind: "handoff" });
     expect(result).toBe(
       "This is an interactive step — you must ask the user to approve a handoff or finish before completing.\n\nDo the thing\n\nContext from previous step: Previous result",
     );
   });
 
+  it("frames a user-request inbound under the user-request label", () => {
+    const step = stepShape("test", { mode: "interactive", description: "Do the thing" });
+    const result = buildKickoffPrompt(step, { message: "m", kind: "user-request" });
+    expect(result).toContain("User request for this run: m");
+    expect(result).not.toContain("Context from previous step");
+  });
+
+  it("frames a handoff inbound under the previous-step label", () => {
+    const step = stepShape("test", { mode: "interactive", description: "Do the thing" });
+    const result = buildKickoffPrompt(step, { message: "m", kind: "handoff" });
+    expect(result).toContain("Context from previous step: m");
+    expect(result).not.toContain("User request for this run");
+  });
+
   it("orders sections: instruction, description, context", () => {
     const step = stepShape("test", { mode: "autonomous", description: "Middle" });
-    const result = buildKickoffPrompt(step, "Last");
+    const result = buildKickoffPrompt(step, { message: "Last", kind: "handoff" });
     const instructionIdx = result.indexOf("autonomous step");
     const descIdx = result.indexOf("Middle");
     const contextIdx = result.indexOf("Last");
@@ -198,10 +212,11 @@ describe("buildKickoffPrompt", () => {
     expect(descIdx).toBeLessThan(contextIdx);
   });
 
-  it("does not include context when inboundMessage is null", () => {
+  it("does not include context when inbound is null", () => {
     const step = stepShape("test", { mode: "autonomous" });
     const result = buildKickoffPrompt(step, null);
     expect(result).not.toContain("Context from previous step");
+    expect(result).not.toContain("User request for this run");
   });
 });
 
@@ -331,7 +346,7 @@ describe("Runner.run orchestration", () => {
     const captured: { inbound: string | null } = { inbound: null };
     const factory: RunnerAgentSessionFactory = {
       create: async (args) => {
-        if (args.step.id === sid("step-2")) captured.inbound = args.inboundMessage;
+        if (args.step.id === sid("step-2")) captured.inbound = args.inbound?.message ?? null;
         const outcome: StepOutcome =
           args.step.id === sid("step-1")
             ? {
@@ -355,6 +370,35 @@ describe("Runner.run orchestration", () => {
     expect(summary.visited).toEqual([sid("step-1"), sid("step-2")]);
     expect(summary.finishMessage).toBe("Received and processed");
     expect(captured.inbound).toBe("Important context");
+  });
+
+  it("frames the entry step as user-request and inter-step handoffs as handoff", async () => {
+    const step1 = stepShape("step-1", {
+      edges: [{ next_step: sid("step-2"), intent: "go to step 2" }],
+    });
+    const step2 = stepShape("step-2");
+    const workflow = makeWorkflow([step1, step2]);
+
+    // Record the kickoff text each step would receive, built from the inbound
+    // the runner hands the session factory — the same path the real session uses.
+    const kickoffs: Record<string, string> = {};
+    const factory = makeFakeSessionFactory({
+      onCreate: (args) => {
+        kickoffs[args.step.id] = buildKickoffPrompt(args.step, args.inbound);
+      },
+      resolveOutcome: (step): StepOutcome =>
+        step.id === sid("step-1")
+          ? { kind: "handoff", nextStep: sid("step-2"), message: "Carry forward" }
+          : { kind: "finish", message: "Done" },
+    });
+
+    const runner = new Runner(workflow, factory, makeTools(), { cwd: "/tmp" });
+    await runner.run(sid("step-1"), { message: "Review PR #42", kind: "user-request" });
+
+    expect(kickoffs[sid("step-1")]).toContain("User request for this run: Review PR #42");
+    expect(kickoffs[sid("step-1")]).not.toContain("Context from previous step");
+    expect(kickoffs[sid("step-2")]).toContain("Context from previous step: Carry forward");
+    expect(kickoffs[sid("step-2")]).not.toContain("User request for this run");
   });
 
   it("treats session creation failure as step failure", async () => {

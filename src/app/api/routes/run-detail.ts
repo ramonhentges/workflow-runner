@@ -75,6 +75,7 @@ export function registerRunDetailRoute(app: ApiApp, rm: RunManager): void {
         startedAt: snap.startedAt,
         endedAt: snap.endedAt,
         attachedCount: active.subscribers.size,
+        initialPrompt: snap.initialPrompt,
       },
       200,
     );

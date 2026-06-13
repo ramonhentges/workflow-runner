@@ -128,6 +128,128 @@ describe("start.run", () => {
     expect(params.branch).toBe("b");
   });
 
+  it("forwards inline --prompt text as initialPrompt in run.start", async () => {
+    const runId = asRunId("rid-prompt");
+    const slug = asRunSlug("inline-otter");
+    const mock = createMockClient({
+      responders: { "run.start": () => ({ runId, slug }) },
+    });
+
+    const code = await start.run(["workflow.json", "--prompt", "x", "--detach"], {
+      connect: async () => mock.asClient(),
+      isTty: () => false,
+      stdout: makeStream(),
+      stderr: makeStream(),
+    });
+
+    expect(code).toBe(0);
+    const startCall = mock.calls.find((c) => c.method === "run.start");
+    expect(startCall).toBeDefined();
+    const params = startCall!.params as { initialPrompt?: string };
+    expect(params.initialPrompt).toBe("x");
+  });
+
+  it("with --prompt -: reads the injected stdin reader and forwards its contents", async () => {
+    const runId = asRunId("rid-stdin");
+    const slug = asRunSlug("stdin-otter");
+    const mock = createMockClient({
+      responders: { "run.start": () => ({ runId, slug }) },
+    });
+    let stdinCalls = 0;
+
+    const code = await start.run(["workflow.json", "--prompt", "-", "--detach"], {
+      connect: async () => mock.asClient(),
+      isTty: () => false,
+      stdout: makeStream(),
+      stderr: makeStream(),
+      readStdin: async () => {
+        stdinCalls += 1;
+        return "from\nstdin\n";
+      },
+    });
+
+    expect(code).toBe(0);
+    expect(stdinCalls).toBe(1);
+    const startCall = mock.calls.find((c) => c.method === "run.start");
+    const params = startCall!.params as { initialPrompt?: string };
+    expect(params.initialPrompt).toBe("from\nstdin\n");
+  });
+
+  it("with --prompt @file: reads the injected file reader and forwards its contents", async () => {
+    const runId = asRunId("rid-file");
+    const slug = asRunSlug("file-otter");
+    const mock = createMockClient({
+      responders: { "run.start": () => ({ runId, slug }) },
+    });
+    let readPath: string | undefined;
+
+    const code = await start.run(
+      ["workflow.json", "--prompt", "@/tmp/brief.md", "--detach"],
+      {
+        connect: async () => mock.asClient(),
+        isTty: () => false,
+        stdout: makeStream(),
+        stderr: makeStream(),
+        readFile: async (path: string) => {
+          readPath = path;
+          return "file brief contents";
+        },
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(readPath).toBe("/tmp/brief.md");
+    const startCall = mock.calls.find((c) => c.method === "run.start");
+    const params = startCall!.params as { initialPrompt?: string };
+    expect(params.initialPrompt).toBe("file brief contents");
+  });
+
+  it("omits initialPrompt from the run.start request when --prompt is absent", async () => {
+    const runId = asRunId("rid-noprompt");
+    const slug = asRunSlug("plain-otter");
+    const mock = createMockClient({
+      responders: { "run.start": () => ({ runId, slug }) },
+    });
+
+    await start.run(["workflow.json", "--detach"], {
+      connect: async () => mock.asClient(),
+      isTty: () => false,
+      stdout: makeStream(),
+      stderr: makeStream(),
+    });
+
+    const startCall = mock.calls.find((c) => c.method === "run.start");
+    expect(startCall).toBeDefined();
+    expect("initialPrompt" in (startCall!.params as object)).toBe(false);
+  });
+
+  it("returns 1 and reports the error when the --prompt file read fails", async () => {
+    const mock = createMockClient({
+      responders: {
+        "run.start": () => ({ runId: asRunId("x"), slug: asRunSlug("y") }),
+      },
+    });
+    const stderr = makeStream();
+
+    const code = await start.run(
+      ["workflow.json", "--prompt", "@/nope.md", "--detach"],
+      {
+        connect: async () => mock.asClient(),
+        isTty: () => false,
+        stdout: makeStream(),
+        stderr,
+        readFile: async () => {
+          throw new Error("ENOENT: no such file");
+        },
+      },
+    );
+
+    expect(code).toBe(1);
+    expect(stderr.chunks.join("")).toContain("ENOENT");
+    // The run was never started.
+    expect(mock.calls.some((c) => c.method === "run.start")).toBe(false);
+  });
+
   it("omits branch from the run.start request when --branch is absent", async () => {
     const runId = asRunId("rid-nobranch");
     const slug = asRunSlug("plain-fox");

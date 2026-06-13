@@ -436,6 +436,149 @@ describe('RunView integration (fake WebSocket + MSW)', () => {
     expect(screen.queryByTestId('isolation-info')).not.toBeInTheDocument()
   })
 
+  test('renders the initial prompt as the opening transcript message when the snapshot carries initialPrompt', async () => {
+    renderRunView('run-prompt')
+    const ws = latestWs()
+
+    act(() => {
+      ws.receive({
+        type: 'snapshot',
+        snapshot: {
+          id: 'run-prompt',
+          slug: 'prompt-slug',
+          workflowPath: '/tmp/wf.json',
+          cwd: '/repo',
+          initialPrompt: 'Ship the launch prompt feature',
+          status: 'running',
+          currentStepId: 'step-1',
+          visitedStepIds: [],
+          startedAt: 1000,
+          endedAt: null,
+          attachedCount: 1,
+        },
+      })
+    })
+
+    // The prompt now lives inside the chat flow as the leading message (matching
+    // the TUI), not in a standalone header banner.
+    let items: HTMLElement[] = []
+    await waitFor(() => {
+      items = screen.getAllByTestId('transcript-item')
+      expect(items.length).toBeGreaterThan(0)
+    })
+    expect(items[0]).toHaveAttribute('data-kind', 'message')
+    expect(items[0]).toHaveTextContent('Ship the launch prompt feature')
+    expect(screen.queryByTestId('initial-prompt-info')).not.toBeInTheDocument()
+  })
+
+  test('shows the prompt as the opening message after a streamed agent reply', async () => {
+    renderRunView('run-prompt-stream')
+    const ws = latestWs()
+
+    act(() => {
+      ws.receive({
+        type: 'snapshot',
+        snapshot: {
+          id: 'run-prompt-stream',
+          slug: 'prompt-stream-slug',
+          workflowPath: '/tmp/wf.json',
+          cwd: '/repo',
+          initialPrompt: 'Investigate the regression',
+          status: 'running',
+          currentStepId: 'step-1',
+          visitedStepIds: [],
+          startedAt: 1000,
+          endedAt: null,
+          attachedCount: 1,
+        },
+      })
+    })
+
+    act(() => {
+      ws.receive({
+        type: 'event',
+        entry: {
+          seq: 1,
+          ts: 1000,
+          stepId: 'step-1',
+          event: { type: 'stream', kind: 'text', chunk: 'Looking into it' },
+        },
+      })
+    })
+
+    expect(await screen.findByText('Looking into it')).toBeInTheDocument()
+    // The synthetic prompt entry stays at the top, ahead of the agent reply.
+    const items = screen.getAllByTestId('transcript-item')
+    expect(items[0]).toHaveTextContent('Investigate the regression')
+    expect(items[items.length - 1]).toHaveTextContent('Looking into it')
+  })
+
+  test('renders the prompt message alongside an unchanged isolation block', async () => {
+    renderRunView('run-prompt-iso')
+    const ws = latestWs()
+
+    act(() => {
+      ws.receive({
+        type: 'snapshot',
+        snapshot: {
+          id: 'run-prompt-iso',
+          slug: 'prompt-iso-slug',
+          workflowPath: '/tmp/wf.json',
+          cwd: '/repo',
+          worktreePath: '/repo-feature-x',
+          branch: 'feature/x',
+          initialPrompt: 'Investigate the bug',
+          status: 'running',
+          currentStepId: 'step-1',
+          visitedStepIds: [],
+          startedAt: 1000,
+          endedAt: null,
+          attachedCount: 1,
+        },
+      })
+    })
+
+    let items: HTMLElement[] = []
+    await waitFor(() => {
+      items = screen.getAllByTestId('transcript-item')
+      expect(items.length).toBeGreaterThan(0)
+    })
+    expect(items[0]).toHaveTextContent('Investigate the bug')
+    // Isolation display is unchanged and still rendered.
+    expect(screen.getByTestId('isolation-branch')).toHaveTextContent('feature/x')
+    expect(screen.getByTestId('isolation-worktree')).toHaveTextContent('/repo-feature-x')
+  })
+
+  test('does not inject a prompt message when the snapshot has no initialPrompt', async () => {
+    renderRunView('run-no-prompt')
+    const ws = latestWs()
+
+    act(() => {
+      ws.receive({
+        type: 'snapshot',
+        snapshot: {
+          id: 'run-no-prompt',
+          slug: 'no-prompt-slug',
+          workflowPath: '/tmp/wf.json',
+          cwd: '/repo',
+          status: 'running',
+          currentStepId: 'step-1',
+          visitedStepIds: [],
+          startedAt: 1000,
+          endedAt: null,
+          attachedCount: 1,
+        },
+      })
+    })
+
+    await waitFor(() => {
+      expect(screen.getByTestId('run-view')).toBeInTheDocument()
+    })
+    expect(screen.queryByTestId('initial-prompt-info')).not.toBeInTheDocument()
+    // No snapshot prompt and no events ⇒ no transcript entries at all.
+    expect(screen.queryAllByTestId('transcript-item')).toHaveLength(0)
+  })
+
   test('snapshot → stream event → interactive(true) → status(completed) → summary panel', async () => {
     renderRunView('run-seq')
     const ws = latestWs()

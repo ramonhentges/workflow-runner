@@ -4,6 +4,15 @@ import type { StepId, StepToken } from "./ids.js";
 
 export type StreamKind = "message" | "thought";
 
+// Frames the entry-step kickoff: "user-request" labels a fresh run's initial
+// prompt, "handoff" labels a resumed/retried step or an inter-step transition.
+export type EntryInboundKind = "user-request" | "handoff";
+
+export interface InboundMessage {
+  message: string;
+  kind: EntryInboundKind;
+}
+
 export type ToolCallStatus = "pending" | "in_progress" | "completed" | "failed";
 
 export interface ToolCallView {
@@ -53,7 +62,7 @@ export interface RunnerAgentSessionArgs {
   step: Step;
   cwd: string;
   tools: RunnerTools;
-  inboundMessage: string | null;
+  inbound: InboundMessage | null;
   sink: RunnerSessionSink;
 }
 
@@ -151,7 +160,10 @@ export class Runner {
     return this.#stopRequested;
   }
 
-  async run(startStepId?: StepId, startInboundMessage?: string | null): Promise<RunSummary> {
+  async run(
+    startStepId?: StepId,
+    startInbound?: InboundMessage | null,
+  ): Promise<RunSummary> {
     const startTime = Date.now();
     const visited: StepId[] = [];
     let finishMessage = "";
@@ -162,7 +174,7 @@ export class Runner {
       this.#maxIterations ?? Math.max(1, this.workflow.steps.length * 10);
 
     let currentStepId: StepId = entryStepId;
-    let inboundMessage: string | null = startInboundMessage ?? null;
+    let inbound: InboundMessage | null = startInbound ?? null;
     let stepIndex = 1;
     let iterationCount = 0;
     let boundaryFailed = false;
@@ -176,7 +188,7 @@ export class Runner {
     };
 
     try {
-      await this.notifyStepBoundary(visited, currentStepId, inboundMessage);
+      await this.notifyStepBoundary(visited, currentStepId, inbound?.message ?? null);
     } catch (err) {
       failure = {
         failedStep: currentStepId,
@@ -217,7 +229,7 @@ export class Runner {
           step,
           cwd: this.#cwd,
           tools: this.#tools,
-          inboundMessage,
+          inbound,
           sink,
         });
         this.#activeSession = session;
@@ -246,7 +258,7 @@ export class Runner {
             break;
           }
           currentStepId = nextStepId;
-          inboundMessage = handoffMessage;
+          inbound = { message: handoffMessage, kind: "handoff" };
         } else if (stepOutcome.kind === "failure") {
           failure = {
             failedStep: stepOutcome.failedStep,

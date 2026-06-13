@@ -119,6 +119,85 @@ describe("parseStartArgs", () => {
     }
   });
 
+  it("parses --prompt <text> alongside the workflow path", () => {
+    const result = parseStartArgs(["wf.json", "--prompt", "hello"]);
+    expect(result).toEqual({
+      ok: true,
+      value: { workflowPath: "wf.json", detach: false, initialPrompt: "hello" },
+    });
+  });
+
+  it("parses the --prompt=<text> form", () => {
+    const result = parseStartArgs(["wf.json", "--prompt=hello"]);
+    expect(result).toEqual({
+      ok: true,
+      value: { workflowPath: "wf.json", detach: false, initialPrompt: "hello" },
+    });
+  });
+
+  it("returns an error when --prompt is given without a value", () => {
+    const result = parseStartArgs(["wf.json", "--prompt"]);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toMatch(/--prompt requires a value/);
+    }
+  });
+
+  it("returns an error when --prompt= is given an empty value", () => {
+    const result = parseStartArgs(["wf.json", "--prompt="]);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toMatch(/--prompt requires a value/);
+    }
+  });
+
+  it("returns an error when --prompt is immediately followed by a flag", () => {
+    const result = parseStartArgs(["wf.json", "--prompt", "--branch"]);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toMatch(/--prompt requires a value/);
+    }
+  });
+
+  it("treats '-' as a valid --prompt value (stdin sentinel) with --branch and -d", () => {
+    const result = parseStartArgs([
+      "wf.json",
+      "--prompt",
+      "-",
+      "--branch",
+      "b",
+      "-d",
+    ]);
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        workflowPath: "wf.json",
+        detach: true,
+        branch: "b",
+        initialPrompt: "-",
+      },
+    });
+  });
+
+  it("keeps the '@<path>' file sentinel as the raw --prompt value", () => {
+    const result = parseStartArgs(["wf.json", "--prompt", "@/tmp/brief.md"]);
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        workflowPath: "wf.json",
+        detach: false,
+        initialPrompt: "@/tmp/brief.md",
+      },
+    });
+  });
+
+  it("omits initialPrompt from the parsed value when --prompt is absent", () => {
+    const result = parseStartArgs(["wf.json"]);
+    if (result.ok && "value" in result) {
+      expect("initialPrompt" in result.value).toBe(false);
+    }
+  });
+
   it("returns help when --help is present", () => {
     expect(parseStartArgs(["--help"])).toEqual({ ok: true, help: true });
   });

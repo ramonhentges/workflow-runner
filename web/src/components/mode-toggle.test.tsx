@@ -9,7 +9,7 @@ import { routeTree } from '../router'
 import { useCwdStore } from '@/stores/cwd-store'
 import { ThemeProvider } from './theme-provider'
 
-const BASE = 'http://127.0.0.1:4517'
+const BASE = 'http://127.0.0.1:4517/api'
 
 function renderShell(initialPath = '/') {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })

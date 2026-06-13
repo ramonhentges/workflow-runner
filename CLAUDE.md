@@ -13,6 +13,10 @@ workflow-runner send <run-id> <message|->       # send input to an interactive r
 workflow-runner retry-step <run-id>             # retry the failing step of a run
 workflow-runner stop <run-id>                   # stop a run (graceful then forceful)
 workflow-runner doctor                          # daemon health report
+workflow-runner daemon start                     # start the daemon (whole app) in the background
+workflow-runner daemon stop                      # stop the daemon gracefully
+workflow-runner daemon status                    # report whether the daemon is running (pid/port)
+workflow-runner daemon restart                   # stop then start the daemon
 workflow-runner daemon                          # run the daemon in the foreground (diagnostics)
 bun test                                        # run all tests
 bun test src/domain/workflow.test.ts            # run a single test file
@@ -20,7 +24,7 @@ bun run typecheck                               # type-check without emitting
 bun run build                                   # compile to ./build/
 ```
 
-The daemon is auto-spawned on first CLI invocation; the `daemon` subcommand exists for diagnostics. `workflow-runner` is exposed via `package.json` `bin` (run `bun link` to put it on `$PATH`); otherwise invoke `bun src/index.ts <subcommand> ...`.
+The daemon is auto-spawned on first CLI invocation; `daemon start|stop|status|restart` manage its lifecycle explicitly, and bare `daemon` runs it in the foreground for diagnostics. `workflow-runner` is exposed via `package.json` `bin` (run `bun link` to put it on `$PATH`); otherwise invoke `bun src/index.ts <subcommand> ...`.
 
 Always use `systematic-debugging` skill when debugging.
 

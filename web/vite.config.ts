@@ -15,6 +15,9 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'jsdom',
+    // Pin the page origin so same-origin API/WS resolution (lib/config.ts) and
+    // the MSW handlers registered against http://127.0.0.1:4517 agree in tests.
+    environmentOptions: { jsdom: { url: 'http://127.0.0.1:4517' } },
     setupFiles: ['./test/setup.ts'],
     coverage: {
       provider: 'v8',

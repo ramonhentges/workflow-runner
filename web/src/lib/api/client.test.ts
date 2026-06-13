@@ -22,7 +22,9 @@ import {
 } from './client'
 import type { IdeCatalog, RunSummary, RunDetail, WorkflowDoc, WorkflowItem } from './types'
 
-const BASE = 'http://127.0.0.1:4517'
+// The client prefixes every request path with /api (the daemon mounts the API
+// there), so MSW handlers are registered against that prefix.
+const BASE = 'http://127.0.0.1:4517/api'
 
 function makeRunSummary(overrides: Partial<RunSummary> = {}): RunSummary {
   return {
@@ -301,7 +303,7 @@ describe('workflow CRUD client functions', () => {
 
     expect(result).toEqual(doc)
     const parsed = new URL(capturedUrl)
-    expect(parsed.pathname).toBe('/workflows/who-is')
+    expect(parsed.pathname).toBe('/api/workflows/who-is')
     expect(parsed.pathname).not.toContain('.json')
     expect(parsed.searchParams.get('cwd')).toBe('/tmp/test')
     expect(parsed.searchParams.get('scope')).toBe('project')
@@ -330,7 +332,7 @@ describe('workflow CRUD client functions', () => {
 
     expect(result).toEqual(response)
     const parsed = new URL(capturedUrl)
-    expect(parsed.pathname).toBe('/workflows')
+    expect(parsed.pathname).toBe('/api/workflows')
     expect(parsed.searchParams.get('cwd')).toBe('/tmp/test')
     expect(parsed.searchParams.get('scope')).toBe('global')
     expect(capturedContentType).toContain('application/json')
@@ -361,7 +363,7 @@ describe('workflow CRUD client functions', () => {
     expect(result).toEqual(response)
     const parsed = new URL(capturedUrl)
     expect(capturedMethod).toBe('PUT')
-    expect(parsed.pathname).toBe('/workflows/old-flow')
+    expect(parsed.pathname).toBe('/api/workflows/old-flow')
     expect(parsed.searchParams.get('cwd')).toBe('/tmp/test')
     expect(parsed.searchParams.get('scope')).toBe('project')
     expect(capturedBody).toEqual(body)
@@ -384,7 +386,7 @@ describe('workflow CRUD client functions', () => {
     expect(result).toEqual({ deleted: 'who-is', scope: 'project' })
     const parsed = new URL(capturedUrl)
     expect(capturedMethod).toBe('DELETE')
-    expect(parsed.pathname).toBe('/workflows/who-is')
+    expect(parsed.pathname).toBe('/api/workflows/who-is')
     expect(parsed.searchParams.get('cwd')).toBe('/tmp/test')
     expect(parsed.searchParams.get('scope')).toBe('project')
   })
@@ -408,7 +410,7 @@ describe('workflow CRUD client functions', () => {
 
     expect(result).toEqual(catalog)
     const parsed = new URL(capturedUrl)
-    expect(parsed.pathname).toBe('/ide/opencode/catalog')
+    expect(parsed.pathname).toBe('/api/ide/opencode/catalog')
     expect(parsed.searchParams.get('cwd')).toBe('/tmp/test')
   })
 
@@ -485,7 +487,7 @@ describe('base URL config (integration)', () => {
 
     let capturedUrl = ''
     server.use(
-      http.get('http://localhost:9999/health', ({ request }) => {
+      http.get('http://localhost:9999/api/health', ({ request }) => {
         capturedUrl = request.url
         return HttpResponse.json({
           status: 'ok',

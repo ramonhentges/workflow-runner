@@ -3,13 +3,34 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { autoSpawnDaemon, daemonEntryPath } from "./spawn.js";
+import { autoSpawnDaemon, buildDaemonSpawnArgs, daemonEntryPath } from "./spawn.js";
 
 describe("autoSpawnDaemon", () => {
   it("exports a daemonEntryPath that resolves to an existing daemon entry file", () => {
     // Ends in .ts under `bun test` (source), .js when running from the bundle.
+    // Null only in a compiled binary, which `bun test` never is.
+    expect(daemonEntryPath).not.toBeNull();
     expect(daemonEntryPath).toMatch(/entry\.(ts|js)$/);
-    expect(existsSync(daemonEntryPath)).toBe(true);
+    expect(existsSync(daemonEntryPath!)).toBe(true);
+  });
+
+  describe("buildDaemonSpawnArgs", () => {
+    it("passes the entry file (and optional storage root) in dev/bundled mode", () => {
+      expect(buildDaemonSpawnArgs("/x/entry.ts")).toEqual(["/x/entry.ts"]);
+      expect(buildDaemonSpawnArgs("/x/entry.ts", "/store")).toEqual([
+        "/x/entry.ts",
+        "/store",
+      ]);
+    });
+
+    it("invokes the `daemon` subcommand when there is no entry file (compiled binary)", () => {
+      expect(buildDaemonSpawnArgs(null)).toEqual(["daemon"]);
+      expect(buildDaemonSpawnArgs(null, "/store")).toEqual([
+        "daemon",
+        "--storage-root",
+        "/store",
+      ]);
+    });
   });
 
   it("writes the 'starting daemon' banner exactly once and spawns a detached child", () => {

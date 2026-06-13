@@ -57,7 +57,7 @@ describe("integration: API listener — discovery file", () => {
         const discovery = await waitForDiscoveryFile(h.storageRoot, 5000);
         const { apiPort } = discovery;
 
-        const res = await fetch(`http://127.0.0.1:${apiPort}/health`, {
+        const res = await fetch(`http://127.0.0.1:${apiPort}/api/health`, {
           headers: { Host: `127.0.0.1:${apiPort}` },
         });
         expect(res.status).toBe(200);
@@ -137,7 +137,7 @@ describe("integration: API listener — no-regression (idle WS vs UDS latency/RS
         const wsReady: Promise<void>[] = [];
         for (let i = 0; i < WS_CONNECTIONS; i++) {
           const { ws, ready } = openIdleWsConnection(
-            `ws://127.0.0.1:${apiPort}/runs/${runId}/attach`,
+            `ws://127.0.0.1:${apiPort}/api/runs/${runId}/attach`,
           );
           openedWs.push(ws);
           wsReady.push(ready);
@@ -277,7 +277,7 @@ describe("integration: shutdown drain — WS client receives close frame on SIGT
           let snapshotSeen = false;
           let backlogSeen = false;
           wsRef.current = new WebSocket(
-            `ws://127.0.0.1:${apiPort}/runs/${runId}/attach`,
+            `ws://127.0.0.1:${apiPort}/api/runs/${runId}/attach`,
           );
           wsRef.current.onmessage = (evt) => {
             try {

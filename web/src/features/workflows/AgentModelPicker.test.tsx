@@ -11,7 +11,7 @@ import { useCwdStore } from '@/stores/cwd-store'
 import { AgentModelPicker } from './AgentModelPicker'
 import { useIdeCatalog } from './useIdeCatalog'
 
-const BASE = 'http://127.0.0.1:4517'
+const BASE = 'http://127.0.0.1:4517/api'
 
 function makeQueryClient() {
   return new QueryClient({

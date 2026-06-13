@@ -15,6 +15,7 @@ import type { Step } from "../../domain/workflow.js";
 import type { StepOutcome } from "../../domain/outcome.js";
 import { asSessionId, type SessionId, type StepToken } from "../../domain/ids.js";
 import type {
+  InboundMessage,
   RunnerAgentSessionFactory,
   ToolCallView,
 } from "../../domain/runner.js";
@@ -74,7 +75,7 @@ export interface AgentSessionArgs {
   step: Step;
   cwd: string;
   tools: AgentSessionTools;
-  inboundMessage: string | null;
+  inbound: InboundMessage | null;
   sink: AgentSessionSink;
 }
 
@@ -85,13 +86,18 @@ const MODE_INSTRUCTIONS: Record<Step["mode"], string> = {
     "This is an autonomous step — after completing the work, **call handoff (if continuing to a next step is appropriate) or finish with a summary**. Do NOT wait for user approval — you must resolve the outcome yourself.",
 };
 
+const INBOUND_LABELS: Record<InboundMessage["kind"], string> = {
+  "user-request": "User request for this run",
+  handoff: "Context from previous step",
+};
+
 export function buildKickoffPrompt(
   step: Step,
-  inboundMessage: string | null,
+  inbound: InboundMessage | null,
 ): string {
   let prompt = `${MODE_INSTRUCTIONS[step.mode]}\n\n${step.description}`;
-  if (inboundMessage) {
-    prompt += `\n\nContext from previous step: ${inboundMessage}`;
+  if (inbound) {
+    prompt += `\n\n${INBOUND_LABELS[inbound.kind]}: ${inbound.message}`;
   }
   return prompt;
 }
@@ -146,7 +152,7 @@ export class AgentSession {
     profile: IdeProfile,
     spawnFn: SpawnFn = spawn,
   ): Promise<AgentSession> {
-    const { step, cwd, tools, inboundMessage, sink } = args;
+    const { step, cwd, tools, inbound, sink } = args;
     sink.status(`Starting step ${step.id}...`);
 
     const agentProcess = spawnFn(profile.spawn.command, profile.spawn.args, {
@@ -285,7 +291,7 @@ export class AgentSession {
         log: (msg, color) => sink.log(msg, color),
       });
 
-      const kickoffPrompt = buildKickoffPrompt(step, inboundMessage);
+      const kickoffPrompt = buildKickoffPrompt(step, inbound);
       sink.log(`Kickoff: ${step.description}`);
 
       // Build the outcome promise: races logical outcome vs subprocess exit

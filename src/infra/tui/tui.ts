@@ -500,6 +500,18 @@ export class Tui {
       parts.length > 0 ? `  ↳ ${parts.join("  ")}` : "";
   }
 
+  /**
+   * Show the prompt a run was started with as the opening transcript entry
+   * (ADR-003), reading like the user's first message — the same `> {text}`
+   * form `submitInput` uses for typed input. Called once from the attach loop
+   * alongside `setIsolation`. A no-op when the run had no initial prompt, so the
+   * transcript is visually unchanged from today.
+   */
+  showInitialPrompt(prompt?: string): void {
+    if (!prompt) return;
+    this.appendLog(`> ${prompt}`, C.blue);
+  }
+
   private setStatus(text: string, color?: string): void {
     this.#statusText.content = `● ${text}`;
     this.#statusText.fg = color ?? C.text;

@@ -88,6 +88,7 @@ export function registerWsAttachRoute(
   rm: RunManager,
   port?: number,
   registry?: WsConnectionRegistry,
+  bindHost?: string,
 ): void {
   let activeConnections = 0;
 
@@ -98,7 +99,7 @@ export function registerWsAttachRoute(
       // Origin allowlist — only enforced when a port is configured (production).
       if (port !== undefined) {
         const origin = c.req.header("Origin");
-        if (!isOriginAllowed(origin, port)) {
+        if (!isOriginAllowed(origin, port, bindHost)) {
           return c.text("Forbidden", 403);
         }
       }

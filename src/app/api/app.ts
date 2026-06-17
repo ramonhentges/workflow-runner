@@ -39,11 +39,12 @@ export function createApiApp(
   port?: number,
   wsRegistry?: WsConnectionRegistry,
   options: ApiAppOptions = {},
+  bindHost?: string,
 ): ApiApp {
   const app = new OpenAPIHono();
 
   if (port !== undefined) {
-    app.use("/*", hostAllowlistMiddleware(port));
+    app.use("/*", hostAllowlistMiddleware(port, bindHost));
     const uiOrigin = process.env.WORKFLOW_RUNNER_UI_ORIGIN;
     if (uiOrigin) {
       app.use("/*", corsMiddleware(uiOrigin));
@@ -69,7 +70,7 @@ export function createApiApp(
   registerWorkflowsRoute(app);
   registerWorkflowCrudRoutes(app, runManager);
   registerIdeCatalogRoute(app, options.ideCatalogProbe);
-  registerWsAttachRoute(app, runManager, port, wsRegistry);
+  registerWsAttachRoute(app, runManager, port, wsRegistry, bindHost);
 
   return app;
 }
@@ -93,14 +94,15 @@ export function createServerApp(
   port?: number,
   wsRegistry?: WsConnectionRegistry,
   options: ApiAppOptions = {},
+  bindHost?: string,
 ): ApiApp {
   const root = new OpenAPIHono();
 
   if (port !== undefined) {
-    root.use("/*", hostAllowlistMiddleware(port));
+    root.use("/*", hostAllowlistMiddleware(port, bindHost));
   }
 
-  const api = createApiApp(runManager, port, wsRegistry, options);
+  const api = createApiApp(runManager, port, wsRegistry, options, bindHost);
   root.route("/api", api);
 
   // Registered last: serves the embedded SPA (and its assets) for any non-API

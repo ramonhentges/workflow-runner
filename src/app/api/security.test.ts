@@ -30,9 +30,9 @@ function makePartialRm(): RunManager {
 }
 
 /** Build a minimal Hono app with the middleware + one test route. */
-function makeTestApp(port: number) {
+function makeTestApp(port: number, bindHost?: string) {
   const app = new Hono();
-  app.use("/*", hostAllowlistMiddleware(port));
+  app.use("/*", hostAllowlistMiddleware(port, bindHost));
   app.get("/test", (c) => c.text("ok"));
   return app;
 }
@@ -61,6 +61,62 @@ describe("allowedHosts", () => {
     const hosts = allowedHosts(4517);
     expect(hosts.has("localhost")).toBe(false);
     expect(hosts.has("127.0.0.1")).toBe(false);
+  });
+});
+
+describe("allowedHosts with bindHost", () => {
+  it("without bindHost returns loopback-only set (existing behavior)", () => {
+    const hosts = allowedHosts(4517);
+    expect(hosts.has("127.0.0.1:4517")).toBe(true);
+    expect(hosts.has("localhost:4517")).toBe(true);
+    expect(hosts.size).toBe(2);
+  });
+
+  it("bindHost='0.0.0.0' returns an empty set (accept all)", () => {
+    const hosts = allowedHosts(4517, "0.0.0.0");
+    expect(hosts.size).toBe(0);
+  });
+
+  it("bindHost='192.168.1.100' includes that IP plus loopbacks", () => {
+    const hosts = allowedHosts(4517, "192.168.1.100");
+    expect(hosts.has("127.0.0.1:4517")).toBe(true);
+    expect(hosts.has("localhost:4517")).toBe(true);
+    expect(hosts.has("192.168.1.100:4517")).toBe(true);
+    expect(hosts.size).toBe(3);
+  });
+
+  it("bindHost='192.168.1.100' excludes non-loopback, non-matching IPs", () => {
+    const hosts = allowedHosts(4517, "192.168.1.100");
+    expect(hosts.has("10.0.0.1:4517")).toBe(false);
+    expect(hosts.has("evil.com:4517")).toBe(false);
+  });
+
+  it("bindHost='127.0.0.1' (explicit) returns loopback-only set", () => {
+    const hosts = allowedHosts(4517, "127.0.0.1");
+    expect(hosts.has("127.0.0.1:4517")).toBe(true);
+    expect(hosts.has("localhost:4517")).toBe(true);
+    expect(hosts.size).toBe(2);
+  });
+
+  it("bindHost='::' (IPv6 all-interfaces) returns an empty set (accept all)", () => {
+    const hosts = allowedHosts(4517, "::");
+    expect(hosts.size).toBe(0);
+  });
+
+  it("bindHost='::1' (IPv6 loopback) includes bracket-notation host plus IPv4 loopbacks", () => {
+    const hosts = allowedHosts(4517, "::1");
+    expect(hosts.has("127.0.0.1:4517")).toBe(true);
+    expect(hosts.has("localhost:4517")).toBe(true);
+    expect(hosts.has("[::1]:4517")).toBe(true);
+    expect(hosts.size).toBe(3);
+  });
+
+  it("bindHost='fe80::1' (IPv6 link-local) includes bracket-notation host plus loopbacks", () => {
+    const hosts = allowedHosts(4517, "fe80::1");
+    expect(hosts.has("127.0.0.1:4517")).toBe(true);
+    expect(hosts.has("localhost:4517")).toBe(true);
+    expect(hosts.has("[fe80::1]:4517")).toBe(true);
+    expect(hosts.size).toBe(3);
   });
 });
 
@@ -178,6 +234,171 @@ describe("hostAllowlistMiddleware", () => {
 });
 
 // ---------------------------------------------------------------------------
+// hostAllowlistMiddleware — bindHost parameter
+// ---------------------------------------------------------------------------
+
+describe("hostAllowlistMiddleware with bindHost", () => {
+  it("bindHost='0.0.0.0' accepts any Host header", async () => {
+    const app = makeTestApp(4517, "0.0.0.0");
+    const res = await app.request(
+      new Request("http://evil.com:4517/test", {
+        headers: { Host: "evil.com:4517" },
+      }),
+    );
+    expect(res.status).toBe(200);
+  });
+
+  it("bindHost='192.168.1.100' accepts that Host and loopbacks", async () => {
+    const app = makeTestApp(4517, "192.168.1.100");
+
+    const resLoopback = await app.request(
+      new Request("http://127.0.0.1:4517/test", {
+        headers: { Host: "127.0.0.1:4517" },
+      }),
+    );
+    expect(resLoopback.status).toBe(200);
+
+    const resLocalhost = await app.request(
+      new Request("http://localhost:4517/test", {
+        headers: { Host: "localhost:4517" },
+      }),
+    );
+    expect(resLocalhost.status).toBe(200);
+
+    const resBind = await app.request(
+      new Request("http://192.168.1.100:4517/test", {
+        headers: { Host: "192.168.1.100:4517" },
+      }),
+    );
+    expect(resBind.status).toBe(200);
+  });
+
+  it("bindHost='192.168.1.100' rejects unrelated Host headers", async () => {
+    const app = makeTestApp(4517, "192.168.1.100");
+    const res = await app.request(
+      new Request("http://10.0.0.1:4517/test", {
+        headers: { Host: "10.0.0.1:4517" },
+      }),
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it("bindHost='0.0.0.0' accepts Host without port (no constraint)", async () => {
+    const app = makeTestApp(4517, "0.0.0.0");
+    const res = await app.request(
+      new Request("http://localhost:4517/test", {
+        headers: { Host: "localhost" },
+      }),
+    );
+    expect(res.status).toBe(200);
+  });
+
+  it("bindHost='::' (IPv6 all-interfaces) accepts any Host header", async () => {
+    const app = makeTestApp(4517, "::");
+    const res = await app.request(
+      new Request("http://evil.com:4517/test", {
+        headers: { Host: "evil.com:4517" },
+      }),
+    );
+    expect(res.status).toBe(200);
+  });
+
+  it("bindHost='::1' (IPv6 loopback) accepts bracket-notation Host", async () => {
+    const app = makeTestApp(4517, "::1");
+    const res = await app.request(
+      new Request("http://[::1]:4517/test", {
+        headers: { Host: "[::1]:4517" },
+      }),
+    );
+    expect(res.status).toBe(200);
+  });
+
+  it("bindHost='::1' (IPv6 loopback) also accepts IPv4 loopback Hosts", async () => {
+    const app = makeTestApp(4517, "::1");
+    const res1 = await app.request(
+      new Request("http://127.0.0.1:4517/test", {
+        headers: { Host: "127.0.0.1:4517" },
+      }),
+    );
+    expect(res1.status).toBe(200);
+    const res2 = await app.request(
+      new Request("http://localhost:4517/test", {
+        headers: { Host: "localhost:4517" },
+      }),
+    );
+    expect(res2.status).toBe(200);
+  });
+
+  it("bindHost='::1' rejects bare IPv6 Host (no brackets)", async () => {
+    const app = makeTestApp(4517, "::1");
+    const res = await app.request(
+      new Request("http://[::1]:4517/test", {
+        headers: { Host: "::1:4517" },
+      }),
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it("bindHost='::1' rejects foreign Host", async () => {
+    const app = makeTestApp(4517, "::1");
+    const res = await app.request(
+      new Request("http://10.0.0.1:4517/test", {
+        headers: { Host: "10.0.0.1:4517" },
+      }),
+    );
+    expect(res.status).toBe(403);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isOriginAllowed — bindHost parameter
+// ---------------------------------------------------------------------------
+
+describe("isOriginAllowed with bindHost", () => {
+  it("bindHost='0.0.0.0' accepts any origin", () => {
+    expect(isOriginAllowed("http://evil.com", DEFAULT_API_PORT, "0.0.0.0")).toBe(true);
+    expect(isOriginAllowed("http://evil.com:4517", DEFAULT_API_PORT, "0.0.0.0")).toBe(true);
+  });
+
+  it("bindHost='192.168.1.100' accepts that origin and loopbacks", () => {
+    expect(isOriginAllowed(`http://192.168.1.100:${DEFAULT_API_PORT}`, DEFAULT_API_PORT, "192.168.1.100")).toBe(true);
+    expect(isOriginAllowed(`http://127.0.0.1:${DEFAULT_API_PORT}`, DEFAULT_API_PORT, "192.168.1.100")).toBe(true);
+    expect(isOriginAllowed(`http://localhost:${DEFAULT_API_PORT}`, DEFAULT_API_PORT, "192.168.1.100")).toBe(true);
+  });
+
+  it("bindHost='192.168.1.100' rejects non-loopback, non-matching origins", () => {
+    expect(isOriginAllowed("http://evil.com", DEFAULT_API_PORT, "192.168.1.100")).toBe(false);
+    expect(isOriginAllowed(`http://10.0.0.1:${DEFAULT_API_PORT}`, DEFAULT_API_PORT, "192.168.1.100")).toBe(false);
+  });
+
+  it("bindHost='192.168.1.100' still accepts null/undefined/empty", () => {
+    expect(isOriginAllowed(null, DEFAULT_API_PORT, "192.168.1.100")).toBe(true);
+    expect(isOriginAllowed(undefined, DEFAULT_API_PORT, "192.168.1.100")).toBe(true);
+    expect(isOriginAllowed("", DEFAULT_API_PORT, "192.168.1.100")).toBe(true);
+  });
+
+  it("bindHost='::' (IPv6 all-interfaces) accepts any origin", () => {
+    expect(isOriginAllowed("http://evil.com", DEFAULT_API_PORT, "::")).toBe(true);
+    expect(isOriginAllowed("http://evil.com:4517", DEFAULT_API_PORT, "::")).toBe(true);
+  });
+
+  it("bindHost='::1' (IPv6 loopback) accepts bracket-notation origin and IPv4 loopbacks", () => {
+    expect(isOriginAllowed(`http://[::1]:${DEFAULT_API_PORT}`, DEFAULT_API_PORT, "::1")).toBe(true);
+    expect(isOriginAllowed(`http://127.0.0.1:${DEFAULT_API_PORT}`, DEFAULT_API_PORT, "::1")).toBe(true);
+    expect(isOriginAllowed(`http://localhost:${DEFAULT_API_PORT}`, DEFAULT_API_PORT, "::1")).toBe(true);
+  });
+
+  it("bindHost='::1' rejects non-loopback, non-matching origins", () => {
+    expect(isOriginAllowed("http://evil.com", DEFAULT_API_PORT, "::1")).toBe(false);
+    expect(isOriginAllowed(`http://10.0.0.1:${DEFAULT_API_PORT}`, DEFAULT_API_PORT, "::1")).toBe(false);
+  });
+
+  it("bindHost='::1' rejects bare IPv6 without brackets", () => {
+    expect(isOriginAllowed(`http://::1:${DEFAULT_API_PORT}`, DEFAULT_API_PORT, "::1")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // DNS-rebinding falsification tests (BUILD-FAILING)
 //
 // These tests MUST fail the build if the Host/Origin security controls are
@@ -246,6 +467,22 @@ describe("[SECURITY] DNS-rebinding falsification — createApiApp with port", ()
   });
 });
 
+describe("[SECURITY] DNS-rebinding with bindHost=0.0.0.0 — empty allowlist accepts all", () => {
+  it("Host: evil.com → 200 accepted (bind-all, no constraint)", async () => {
+    const app = createApiApp(makePartialRm(), DEFAULT_API_PORT, undefined, {}, "0.0.0.0");
+    const res = await app.request(
+      new Request(`http://localhost:${DEFAULT_API_PORT}/health`, {
+        headers: { Host: "evil.com" },
+      }),
+    );
+    expect(res.status).toBe(200);
+  });
+
+  it("Origin: http://evil.com → accepted (bind-all, no constraint)", () => {
+    expect(isOriginAllowed("http://evil.com", DEFAULT_API_PORT, "0.0.0.0")).toBe(true);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Integration — Host allowlist covers all registered routes
 // ---------------------------------------------------------------------------
@@ -295,6 +532,72 @@ describe("Host allowlist integration — all routes protected", () => {
       }),
     );
     expect(res.status).toBe(200);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Integration — Host allowlist with bindHost
+// ---------------------------------------------------------------------------
+
+describe("Host allowlist integration — createApiApp with bindHost", () => {
+  it("bindHost='0.0.0.0' accepts request with foreign Host", async () => {
+    const app = createApiApp(makePartialRm(), DEFAULT_API_PORT, undefined, {}, "0.0.0.0");
+    const res = await app.request(
+      new Request(`http://localhost:${DEFAULT_API_PORT}/health`, {
+        headers: { Host: "foreign.local" },
+      }),
+    );
+    expect(res.status).toBe(200);
+  });
+
+  it("bindHost='192.168.1.100' accepts request with that IP as Host", async () => {
+    const app = createApiApp(makePartialRm(), DEFAULT_API_PORT, undefined, {}, "192.168.1.100");
+    const res = await app.request(
+      new Request(`http://192.168.1.100:${DEFAULT_API_PORT}/health`, {
+        headers: { Host: `192.168.1.100:${DEFAULT_API_PORT}` },
+      }),
+    );
+    expect(res.status).toBe(200);
+  });
+
+  it("bindHost='192.168.1.100' rejects request with foreign Host", async () => {
+    const app = createApiApp(makePartialRm(), DEFAULT_API_PORT, undefined, {}, "192.168.1.100");
+    const res = await app.request(
+      new Request(`http://localhost:${DEFAULT_API_PORT}/health`, {
+        headers: { Host: "10.0.0.1:4517" },
+      }),
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it("bindHost='::' (IPv6 all-interfaces) accepts foreign Host", async () => {
+    const app = createApiApp(makePartialRm(), DEFAULT_API_PORT, undefined, {}, "::");
+    const res = await app.request(
+      new Request(`http://localhost:${DEFAULT_API_PORT}/health`, {
+        headers: { Host: "foreign.local" },
+      }),
+    );
+    expect(res.status).toBe(200);
+  });
+
+  it("bindHost='::1' (IPv6 loopback) accepts bracket-notation Host", async () => {
+    const app = createApiApp(makePartialRm(), DEFAULT_API_PORT, undefined, {}, "::1");
+    const res = await app.request(
+      new Request(`http://[::1]:${DEFAULT_API_PORT}/health`, {
+        headers: { Host: `[::1]:${DEFAULT_API_PORT}` },
+      }),
+    );
+    expect(res.status).toBe(200);
+  });
+
+  it("bindHost='::1' rejects foreign Host", async () => {
+    const app = createApiApp(makePartialRm(), DEFAULT_API_PORT, undefined, {}, "::1");
+    const res = await app.request(
+      new Request(`http://localhost:${DEFAULT_API_PORT}/health`, {
+        headers: { Host: "10.0.0.1:4517" },
+      }),
+    );
+    expect(res.status).toBe(403);
   });
 });
 

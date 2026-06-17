@@ -19,7 +19,7 @@ import { createServerApp } from "../../app/api/app.js";
 import { websocket, createWsConnectionRegistry } from "../../app/api/routes/ws-attach.js";
 import { DEFAULT_API_PORT } from "../../app/api/security.js";
 import type { DiscoveryFile } from "../../app/api/schema.js";
-import { DaemonLogger } from "./daemon-log.js";
+import { DaemonLogger, type DaemonLogRecord } from "./daemon-log.js";
 import { RunManager } from "./run-manager.js";
 import { RunStore } from "./run-store.js";
 import { RpcServer, type RpcDuplex } from "./rpc/server.js";
@@ -33,6 +33,7 @@ import { createRunSendHandler } from "./handlers/run-send.js";
 import { createRunStartHandler } from "./handlers/run-start.js";
 import { createRunStopHandler } from "./handlers/run-stop.js";
 
+export const DEFAULT_BIND_HOST = "127.0.0.1";
 const DIR_MODE = 0o700;
 const FILE_MODE = 0o600;
 const SOCKET_FILENAME = "daemon.sock";
@@ -44,6 +45,8 @@ export interface RunDaemonOptions {
   storageRoot?: string;
   /** API server port. Overrides WORKFLOW_RUNNER_API_PORT env and the 4517 default. */
   apiPort?: number;
+  /** Bind address for the HTTP server. Overrides WORKFLOW_RUNNER_HOST env and the 127.0.0.1 default. */
+  bindHost?: string;
 }
 
 /**
@@ -64,14 +67,44 @@ export function resolveApiPort(
 }
 
 /**
- * Asserts the bound hostname is IPv4 loopback. Aborts daemon startup if not.
+ * Resolves the bind host: explicit opt > WORKFLOW_RUNNER_HOST env > DEFAULT_BIND_HOST.
  * Exported for unit testing.
  */
-export function assertLoopbackBind(hostname: string): void {
-  if (hostname !== "127.0.0.1") {
-    throw new Error(
-      `API listener bound to non-loopback address '${hostname}'; daemon startup aborted`,
-    );
+export function resolveBindHost(
+  opts: RunDaemonOptions,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  if (opts.bindHost !== undefined) return opts.bindHost;
+  const envVal = env.WORKFLOW_RUNNER_HOST;
+  if (envVal) return envVal;
+  return DEFAULT_BIND_HOST;
+}
+
+/**
+ * Kept for backward compatibility. No-op as of ADR-001 — the post-listen
+ * assertion has been replaced with a warning log in runDaemon.
+ */
+export function assertLoopbackBind(_hostname: string): void {
+  /* no-op */
+}
+
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
+
+/**
+ * Logs a warning when the API server is bound to a non-loopback address.
+ * Exported for unit testing.
+ */
+export function warnNonLoopbackBind(
+  boundHostname: string,
+  logger: { log: (rec: DaemonLogRecord) => void },
+): void {
+  if (!LOOPBACK_HOSTS.has(boundHostname)) {
+    logger.log({
+      level: "WARN",
+      event: "api.bindNonLoopback",
+      address: boundHostname,
+      msg: `Binding to ${boundHostname} exposes the daemon to your local network`,
+    });
   }
 }
 
@@ -444,6 +477,7 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<void> {
   let triggerExit: (reason: string) => void = () => {};
 
   const configuredPort = resolveApiPort(opts);
+  const bindHost = resolveBindHost(opts);
 
   try {
     await runManager.discoverOnStartup();
@@ -463,7 +497,7 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<void> {
     try {
       apiServer = Bun.serve({
         port: configuredPort,
-        hostname: "127.0.0.1",
+        hostname: bindHost,
         fetch: (req, srv) => appFetch(req, srv),
         websocket,
       });
@@ -473,25 +507,13 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<void> {
       throw new Error(`Failed to bind API listener on port ${configuredPort}: ${msg}`);
     }
 
-    // Post-listen loopback assertion — aborts startup if Bun bound to a non-loopback address.
+    // Post-listen non-loopback warning — replaces the old assertLoopbackBind abort.
     const boundHostname = apiServer.hostname ?? "";
-    try {
-      assertLoopbackBind(boundHostname);
-    } catch (assertErr) {
-      logger.log({
-        level: "ERROR",
-        event: "api.bindRejected",
-        address: boundHostname,
-        msg: assertErr instanceof Error ? assertErr.message : String(assertErr),
-      });
-      apiServer.stop(true);
-      apiServer = null;
-      throw assertErr;
-    }
+    warnNonLoopbackBind(boundHostname, logger);
 
     // Create the Hono app with the ACTUAL bound port so the allowlist is correct.
     const actualPort = apiServer.port ?? 0;
-    const app = createServerApp(runManager, actualPort, wsRegistry);
+    const app = createServerApp(runManager, actualPort, wsRegistry, {}, bindHost);
     appFetch = app.fetch as typeof appFetch;
 
     // Write discovery file (0600) before binding the UDS socket so that

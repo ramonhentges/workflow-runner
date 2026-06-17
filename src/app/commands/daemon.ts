@@ -21,6 +21,7 @@ export interface DaemonDeps {
   runDaemon?: (opts: {
     apiPort?: number;
     storageRoot?: string;
+    bindHost?: string;
   }) => Promise<number | void>;
   connect?: typeof defaultConnect;
   runningDaemon?: (storageRoot?: string) => DiscoveryFile | null;
@@ -72,11 +73,11 @@ async function runForeground(argv: string[], deps: DaemonDeps): Promise<number> 
     return 0;
   }
 
-  const { apiPort, storageRoot } = parsed.value;
+  const { apiPort, storageRoot, bindHost } = parsed.value;
   const runDaemonFn = deps.runDaemon ?? ((opts) => defaultRunDaemon(opts));
 
   try {
-    const result = await runDaemonFn({ apiPort, storageRoot });
+    const result = await runDaemonFn({ apiPort, storageRoot, bindHost });
     return typeof result === "number" ? result : 0;
   } catch (err) {
     stderr.write(
@@ -101,7 +102,7 @@ async function runStart(argv: string[], deps: DaemonDeps): Promise<number> {
     stdout.write(`${USAGE.daemon}\n`);
     return 0;
   }
-  const { apiPort, storageRoot } = parsed.value;
+  const { apiPort, storageRoot, bindHost } = parsed.value;
 
   const existing = running(storageRoot);
   if (existing) {
@@ -115,6 +116,9 @@ async function runStart(argv: string[], deps: DaemonDeps): Promise<number> {
   // so `--api-port` is honored by the detached child auto-spawn inherits.
   if (apiPort !== undefined) {
     process.env.WORKFLOW_RUNNER_API_PORT = String(apiPort);
+  }
+  if (bindHost !== undefined) {
+    process.env.WORKFLOW_RUNNER_HOST = bindHost;
   }
 
   let client: DaemonClient;

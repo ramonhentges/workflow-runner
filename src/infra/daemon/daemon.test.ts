@@ -10,15 +10,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   DaemonAlreadyRunningError,
+  DEFAULT_BIND_HOST,
   acquireLock,
   assertLoopbackBind,
   bindSocket,
   makeShutdown,
   releaseLock,
   resolveApiPort,
+  resolveBindHost,
+  warnNonLoopbackBind,
   writeDiscoveryFile,
   type AcquiredLock,
 } from "./daemon.js";
+import type { DaemonLogRecord } from "./daemon-log.js";
 import { DEFAULT_API_PORT } from "../../app/api/security.js";
 
 const roots: string[] = [];
@@ -300,24 +304,122 @@ describe("resolveApiPort", () => {
 });
 
 // ---------------------------------------------------------------------------
-// assertLoopbackBind
+// resolveBindHost
+// ---------------------------------------------------------------------------
+
+describe("resolveBindHost", () => {
+  it("returns the explicit opts.bindHost when provided, ignoring env", () => {
+    const host = resolveBindHost({ bindHost: "0.0.0.0" }, { WORKFLOW_RUNNER_HOST: "192.168.1.1" });
+    expect(host).toBe("0.0.0.0");
+  });
+
+  it("returns the WORKFLOW_RUNNER_HOST env value when no opt is given", () => {
+    const host = resolveBindHost({}, { WORKFLOW_RUNNER_HOST: "192.168.1.100" });
+    expect(host).toBe("192.168.1.100");
+  });
+
+  it("falls back to DEFAULT_BIND_HOST when neither opt nor env is set", () => {
+    const host = resolveBindHost({}, {});
+    expect(host).toBe(DEFAULT_BIND_HOST);
+  });
+
+  it("ignores an empty-string env value and falls back to default", () => {
+    const host = resolveBindHost({}, { WORKFLOW_RUNNER_HOST: "" });
+    expect(host).toBe(DEFAULT_BIND_HOST);
+  });
+
+  it("accepts 0.0.0.0 as a valid bind host", () => {
+    const host = resolveBindHost({ bindHost: "0.0.0.0" }, {});
+    expect(host).toBe("0.0.0.0");
+  });
+
+  it("accepts an IPv6 address like :: as a valid bind host", () => {
+    const host = resolveBindHost({ bindHost: "::" }, {});
+    expect(host).toBe("::");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// assertLoopbackBind (no-op since ADR-001)
 // ---------------------------------------------------------------------------
 
 describe("assertLoopbackBind", () => {
-  it("does not throw when hostname is 127.0.0.1", () => {
+  it("is a no-op for loopback address", () => {
     expect(() => assertLoopbackBind("127.0.0.1")).not.toThrow();
   });
 
-  it("throws when hostname is 0.0.0.0", () => {
-    expect(() => assertLoopbackBind("0.0.0.0")).toThrow(/non-loopback/);
+  it("is a no-op for non-loopback address", () => {
+    expect(() => assertLoopbackBind("0.0.0.0")).not.toThrow();
   });
 
-  it("throws when hostname is ::", () => {
-    expect(() => assertLoopbackBind("::")).toThrow(/non-loopback/);
+  it("is a no-op for IPv6 address", () => {
+    expect(() => assertLoopbackBind("::")).not.toThrow();
   });
 
-  it("throws when hostname is empty string", () => {
-    expect(() => assertLoopbackBind("")).toThrow(/non-loopback/);
+  it("is a no-op for empty string", () => {
+    expect(() => assertLoopbackBind("")).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// warnNonLoopbackBind
+// ---------------------------------------------------------------------------
+
+describe("warnNonLoopbackBind", () => {
+  it("does not log when bound to 127.0.0.1", () => {
+    const logged: DaemonLogRecord[] = [];
+    const logger = { log: (rec: DaemonLogRecord) => { logged.push(rec); } };
+    warnNonLoopbackBind("127.0.0.1", logger);
+    expect(logged.length).toBe(0);
+  });
+
+  it("does not log when bound to localhost", () => {
+    const logged: DaemonLogRecord[] = [];
+    const logger = { log: (rec: DaemonLogRecord) => { logged.push(rec); } };
+    warnNonLoopbackBind("localhost", logger);
+    expect(logged.length).toBe(0);
+  });
+
+  it("does not log when bound to IPv6 loopback ::1", () => {
+    const logged: DaemonLogRecord[] = [];
+    const logger = { log: (rec: DaemonLogRecord) => { logged.push(rec); } };
+    warnNonLoopbackBind("::1", logger);
+    expect(logged.length).toBe(0);
+  });
+
+  it("logs WARN level for non-loopback hostname", () => {
+    const logged: DaemonLogRecord[] = [];
+    const logger = { log: (rec: DaemonLogRecord) => { logged.push(rec); } };
+    warnNonLoopbackBind("0.0.0.0", logger);
+    expect(logged.length).toBe(1);
+    expect(logged[0].level).toBe("WARN");
+    expect(logged[0].event).toBe("api.bindNonLoopback");
+    expect(logged[0].address).toBe("0.0.0.0");
+  });
+
+  it("logs WARN level for specific LAN IP", () => {
+    const logged: DaemonLogRecord[] = [];
+    const logger = { log: (rec: DaemonLogRecord) => { logged.push(rec); } };
+    warnNonLoopbackBind("192.168.1.100", logger);
+    expect(logged.length).toBe(1);
+    expect(logged[0].level).toBe("WARN");
+    expect(logged[0].address).toBe("192.168.1.100");
+  });
+
+  it("logs WARN level for IPv6 non-loopback", () => {
+    const logged: DaemonLogRecord[] = [];
+    const logger = { log: (rec: DaemonLogRecord) => { logged.push(rec); } };
+    warnNonLoopbackBind("::", logger);
+    expect(logged.length).toBe(1);
+    expect(logged[0].level).toBe("WARN");
+    expect(logged[0].address).toBe("::");
+  });
+
+  it("includes a descriptive msg field", () => {
+    const logged: DaemonLogRecord[] = [];
+    const logger = { log: (rec: DaemonLogRecord) => { logged.push(rec); } };
+    warnNonLoopbackBind("0.0.0.0", logger);
+    expect(logged[0].msg).toBe("Binding to 0.0.0.0 exposes the daemon to your local network");
   });
 });
 

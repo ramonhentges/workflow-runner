@@ -2,6 +2,10 @@ import { describe, expect, it } from "bun:test";
 
 import * as daemon from "./daemon.js";
 
+function readEnv(key: string): string | undefined {
+  return process.env[key];
+}
+
 function makeStream() {
   const chunks: string[] = [];
   return { chunks, write: (s: string) => chunks.push(s) };
@@ -75,6 +79,35 @@ describe("daemon.run", () => {
     expect(calls).toBe(0);
     expect(stderr.chunks.join("")).toContain("--bogus");
   });
+
+  it("forwards --host to runDaemonFn in foreground mode", async () => {
+    let received: { apiPort?: number; storageRoot?: string; bindHost?: string } | undefined;
+    const stderr = makeStream();
+    const code = await daemon.run(["--host", "0.0.0.0"], {
+      runDaemon: async (opts) => {
+        received = opts;
+      },
+      stderr,
+    });
+    expect(code).toBe(0);
+    expect(received).toEqual({ bindHost: "0.0.0.0" });
+  });
+
+  it("forwards --host alongside --api-port in foreground mode", async () => {
+    let received: { apiPort?: number; storageRoot?: string; bindHost?: string } | undefined;
+    const stderr = makeStream();
+    const code = await daemon.run(
+      ["--api-port", "5005", "--host", "192.168.1.1", "--storage-root", "/var/store"],
+      {
+        runDaemon: async (opts) => {
+          received = opts;
+        },
+        stderr,
+      },
+    );
+    expect(code).toBe(0);
+    expect(received).toEqual({ apiPort: 5005, storageRoot: "/var/store", bindHost: "192.168.1.1" });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -141,6 +174,50 @@ describe("daemon start", () => {
     });
     expect(code).toBe(1);
     expect(stderr.chunks.join("")).toContain("failed to start daemon");
+  });
+
+  it("sets WORKFLOW_RUNNER_HOST env var in runStart() when bindHost is provided", async () => {
+    const stdout = makeStream();
+    const orig = process.env.WORKFLOW_RUNNER_HOST;
+    delete process.env.WORKFLOW_RUNNER_HOST;
+    try {
+      const client: FakeClient = { call: async () => ({}), close: async () => {} };
+      const code = await daemon.run(["start", "--host", "0.0.0.0"], {
+        runningDaemon: queuedRunning([null, REC]),
+        connect: (async () => client) as never,
+        stdout,
+      });
+      expect(code).toBe(0);
+      expect(readEnv("WORKFLOW_RUNNER_HOST")).toBe("0.0.0.0");
+    } finally {
+      if (orig !== undefined) {
+        process.env.WORKFLOW_RUNNER_HOST = orig;
+      } else {
+        delete process.env.WORKFLOW_RUNNER_HOST;
+      }
+    }
+  });
+
+  it("does not set WORKFLOW_RUNNER_HOST env var when bindHost is undefined", async () => {
+    const stdout = makeStream();
+    const orig = process.env.WORKFLOW_RUNNER_HOST;
+    delete process.env.WORKFLOW_RUNNER_HOST;
+    try {
+      const client: FakeClient = { call: async () => ({}), close: async () => {} };
+      const code = await daemon.run(["start"], {
+        runningDaemon: queuedRunning([null, REC]),
+        connect: (async () => client) as never,
+        stdout,
+      });
+      expect(code).toBe(0);
+      expect(readEnv("WORKFLOW_RUNNER_HOST")).toBeUndefined();
+    } finally {
+      if (orig !== undefined) {
+        process.env.WORKFLOW_RUNNER_HOST = orig;
+      } else {
+        delete process.env.WORKFLOW_RUNNER_HOST;
+      }
+    }
   });
 });
 

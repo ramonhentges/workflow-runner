@@ -216,6 +216,38 @@ describe("WS /runs/:id/attach — pre-upgrade (HTTP responses)", () => {
     expect(res.status).toBe(403);
   });
 
+  it("returns 200 when bindHost is a LAN IP and Origin matches that IP", async () => {
+    const app = createApiApp(makeRm(), DEFAULT_API_PORT, undefined, {}, "192.168.1.100");
+    const res = await app.request(
+      new Request(`http://localhost:${DEFAULT_API_PORT}/runs/run001/attach`, {
+        headers: {
+          Host: `localhost:${DEFAULT_API_PORT}`,
+          Origin: `http://192.168.1.100:${DEFAULT_API_PORT}`,
+          Upgrade: "websocket",
+          Connection: "Upgrade",
+        },
+      }),
+    );
+    // Not 403 — origin is allowed because bindHost matches.
+    expect(res.status).not.toBe(403);
+  });
+
+  it("returns 200 when bindHost is 0.0.0.0 (any origin accepted)", async () => {
+    const app = createApiApp(makeRm(), DEFAULT_API_PORT, undefined, {}, "0.0.0.0");
+    const res = await app.request(
+      new Request(`http://localhost:${DEFAULT_API_PORT}/runs/run001/attach`, {
+        headers: {
+          Host: "any-host:4517",
+          Origin: "http://192.168.1.100:4517",
+          Upgrade: "websocket",
+          Connection: "Upgrade",
+        },
+      }),
+    );
+    // Not 403 — 0.0.0.0 allows all origins.
+    expect(res.status).not.toBe(403);
+  });
+
   it("allows upgrade when Origin is null (non-browser client) — tested via isOriginAllowed", () => {
     // The Origin allowlist guard for null/empty origins is tested directly in
     // security.test.ts via isOriginAllowed(). Pre-upgrade middleware only calls

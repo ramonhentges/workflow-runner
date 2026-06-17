@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import { generateId } from '@/lib/utils'
 
 export interface Cwd {
   id: string
@@ -22,7 +23,7 @@ export const useCwdStore = create<CwdState>()(
       cwds: [],
       activeCwdId: null,
       addCwd(label, path) {
-        const id = crypto.randomUUID()
+        const id = generateId()
         set(state => ({
           cwds: [...state.cwds, { id, label, path }],
           activeCwdId: state.activeCwdId === null ? id : state.activeCwdId,

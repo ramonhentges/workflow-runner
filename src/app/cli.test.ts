@@ -441,6 +441,59 @@ describe("parseDaemonArgs", () => {
   it("returns help on -h", () => {
     expect(parseDaemonArgs(["-h"])).toEqual({ ok: true, help: true });
   });
+
+  it("parses --host 0.0.0.0 into DaemonArgs.bindHost", () => {
+    const result = parseDaemonArgs(["--host", "0.0.0.0"]);
+    expect(result).toEqual({
+      ok: true,
+      value: { bindHost: "0.0.0.0" },
+    });
+  });
+
+  it("parses --host=0.0.0.0 into DaemonArgs.bindHost", () => {
+    const result = parseDaemonArgs(["--host=0.0.0.0"]);
+    expect(result).toEqual({
+      ok: true,
+      value: { bindHost: "0.0.0.0" },
+    });
+  });
+
+  it("parsing an IP address like 192.168.1.100 does not trigger port validation", () => {
+    const result = parseDaemonArgs(["--host", "192.168.1.100"]);
+    expect(result).toEqual({
+      ok: true,
+      value: { bindHost: "192.168.1.100" },
+    });
+  });
+
+  it("empty argv produces undefined bindHost", () => {
+    const result = parseDaemonArgs([]);
+    expect(result).toEqual({ ok: true, value: {} });
+  });
+
+  it("--api-port and --host can be combined", () => {
+    const result = parseDaemonArgs(["--api-port", "8080", "--host", "0.0.0.0"]);
+    expect(result).toEqual({
+      ok: true,
+      value: { apiPort: 8080, bindHost: "0.0.0.0" },
+    });
+  });
+
+  it("--storage-root and --host can be combined", () => {
+    const result = parseDaemonArgs(["--storage-root", "/tmp/data", "--host", "0.0.0.0"]);
+    expect(result).toEqual({
+      ok: true,
+      value: { storageRoot: "/tmp/data", bindHost: "0.0.0.0" },
+    });
+  });
+
+  it("returns an error when --host is given without a value", () => {
+    const result = parseDaemonArgs(["--host"]);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toMatch(/--host requires a value/);
+    }
+  });
 });
 
 describe("argv non-mutation", () => {

@@ -2,9 +2,20 @@ import type { MiddlewareHandler } from "hono";
 
 export const DEFAULT_API_PORT = 4517;
 
-/** Returns the set of allowed `Host` header values for a given port. */
-export function allowedHosts(port: number): Set<string> {
-  return new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
+function formatHost(host: string, port: number): string {
+  return host.includes(":") ? `[${host}]:${port}` : `${host}:${port}`;
+}
+
+/** Returns the set of allowed `Host` header values for a given port and optional bind address. */
+export function allowedHosts(port: number, bindHost?: string): Set<string> {
+  if (bindHost === "0.0.0.0" || bindHost === "::") {
+    return new Set<string>();
+  }
+  const hosts = [`127.0.0.1:${port}`, `localhost:${port}`];
+  if (bindHost && bindHost !== "127.0.0.1") {
+    hosts.push(formatHost(bindHost, port));
+  }
+  return new Set(hosts);
 }
 
 /**
@@ -17,13 +28,18 @@ export function allowedHosts(port: number): Set<string> {
 export function isOriginAllowed(
   origin: string | null | undefined,
   port: number,
+  bindHost?: string,
 ): boolean {
   if (!origin) return true;
+  if (bindHost === "0.0.0.0" || bindHost === "::") return true;
   if (
     origin === `http://127.0.0.1:${port}` ||
     origin === `http://localhost:${port}`
   ) {
     return true;
+  }
+  if (bindHost && bindHost !== "127.0.0.1") {
+    if (origin === `http://${formatHost(bindHost, port)}`) return true;
   }
   const uiOrigin = process.env.WORKFLOW_RUNNER_UI_ORIGIN;
   return !!uiOrigin && origin === uiOrigin;
@@ -34,9 +50,10 @@ export function isOriginAllowed(
  * Requests whose `Host` is not `127.0.0.1:<port>` or `localhost:<port>`
  * are rejected with 403.
  */
-export function hostAllowlistMiddleware(port: number): MiddlewareHandler {
-  const hosts = allowedHosts(port);
+export function hostAllowlistMiddleware(port: number, bindHost?: string): MiddlewareHandler {
+  const hosts = allowedHosts(port, bindHost);
   return async (c, next) => {
+    if (hosts.size === 0) return next();
     const host = c.req.header("Host") ?? "";
     if (!hosts.has(host)) {
       return c.text("Forbidden", 403);

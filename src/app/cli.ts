@@ -39,6 +39,7 @@ export type DoctorArgs = Record<string, never>;
 export interface DaemonArgs {
   apiPort?: number;
   storageRoot?: string;
+  bindHost?: string;
 }
 
 export const USAGE = {
@@ -54,7 +55,7 @@ export const USAGE = {
   send: "Usage: workflow-runner send <run-id> <message|->",
   doctor: "Usage: workflow-runner doctor",
   daemon:
-    "Usage: workflow-runner daemon [start|stop|status|restart] [--api-port <port>] [--storage-root <path>]\n" +
+    "Usage: workflow-runner daemon [start|stop|status|restart] [--api-port <port>] [--storage-root <path>] [--host <address>]\n" +
     "  (bare `daemon` runs the daemon in the foreground for diagnostics)",
 } as const;
 
@@ -242,6 +243,7 @@ export function parseDaemonArgs(
   if (hasHelp(argv)) return { ok: true, help: true };
   let apiPort: number | undefined;
   let storageRoot: string | undefined;
+  let bindHost: string | undefined;
   let i = 0;
   while (i < argv.length) {
     const arg = argv[i]!;
@@ -257,6 +259,21 @@ export function parseDaemonArgs(
     }
     if (arg.startsWith("--storage-root=")) {
       storageRoot = arg.slice("--storage-root=".length);
+      i++;
+      continue;
+    }
+    if (arg === "--host") {
+      i++;
+      const val = argv[i];
+      if (val === undefined) {
+        return { ok: false, error: "--host requires a value" };
+      }
+      bindHost = val;
+      i++;
+      continue;
+    }
+    if (arg.startsWith("--host=")) {
+      bindHost = arg.slice("--host=".length);
       i++;
       continue;
     }
@@ -280,5 +297,5 @@ export function parseDaemonArgs(
     }
     apiPort = n;
   }
-  return { ok: true, value: { apiPort, storageRoot } };
+  return { ok: true, value: { apiPort, storageRoot, bindHost } };
 }

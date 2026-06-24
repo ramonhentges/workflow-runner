@@ -1,5 +1,5 @@
 import { Circle, CircleCheck, CircleX, LoaderCircle } from 'lucide-react'
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, type RefObject } from 'react'
 import { Streamdown } from 'streamdown'
 import { code } from '@streamdown/code'
 import { cn } from '@/lib/utils'
@@ -9,6 +9,7 @@ import type { TranscriptItem } from '@/lib/ws/reducer'
 interface TranscriptProps {
   items: TranscriptItem[]
   truncated?: boolean
+  scrollContainerRef?: RefObject<HTMLDivElement | null>
 }
 
 // Status affordance for a folded tool-call row. The spinner animates via the
@@ -99,24 +100,24 @@ function ToolCallRow({ item }: { item: TranscriptItem }) {
   )
 }
 
-export function Transcript({ items, truncated }: TranscriptProps) {
+export function Transcript({ items, truncated, scrollContainerRef }: TranscriptProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const endRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    const container = containerRef.current
+    const container = scrollContainerRef?.current ?? containerRef.current
     if (!container) return
     const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight
     if (distanceFromBottom < 100) {
       endRef.current?.scrollIntoView({ behavior: 'auto' })
     }
-  }, [items])
+  }, [items, scrollContainerRef])
 
   return (
     <div
       ref={containerRef}
       data-testid="transcript"
-      className="min-h-0 flex-1 space-y-1 overflow-y-auto bg-muted/20 p-4 font-mono text-sm"
+      className="space-y-1 bg-muted/20 p-4 font-mono text-sm"
     >
       {truncated && (
         <div

@@ -102,7 +102,7 @@ describe('InputBox — disabled state', () => {
 })
 
 describe('InputBox — send behavior', () => {
-  test('calls onSend with the typed text and clears input', async () => {
+  test('calls onSend with the typed text and clears input on Send button click', async () => {
     const user = userEvent.setup()
     const onSend = vi.fn()
     render(<InputBox enabled={true} onSend={onSend} />)
@@ -110,6 +110,19 @@ describe('InputBox — send behavior', () => {
     const input = screen.getByRole('textbox', { name: 'Message' })
     await user.type(input, 'hello world')
     await user.click(screen.getByRole('button', { name: 'Send' }))
+
+    expect(onSend).toHaveBeenCalledWith('hello world')
+    expect(onSend).toHaveBeenCalledTimes(1)
+    expect(input).toHaveValue('')
+  })
+
+  test('calls onSend and clears input on Enter key', async () => {
+    const user = userEvent.setup()
+    const onSend = vi.fn()
+    render(<InputBox enabled={true} onSend={onSend} />)
+
+    const input = screen.getByRole('textbox', { name: 'Message' })
+    await user.type(input, 'hello world{Enter}')
 
     expect(onSend).toHaveBeenCalledWith('hello world')
     expect(onSend).toHaveBeenCalledTimes(1)
@@ -135,6 +148,20 @@ describe('InputBox — send behavior', () => {
     // Send button should remain disabled for whitespace-only input
     expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled()
     expect(onSend).not.toHaveBeenCalled()
+  })
+
+  test('Shift+Enter inserts newline without submitting', async () => {
+    const user = userEvent.setup()
+    const onSend = vi.fn()
+    render(<InputBox enabled={true} onSend={onSend} />)
+
+    const input = screen.getByRole('textbox', { name: 'Message' })
+    await user.type(input, 'line one')
+    await user.keyboard('{Shift>}{Enter}{/Shift}')
+    await user.type(input, 'line two')
+
+    expect(onSend).not.toHaveBeenCalled()
+    expect(input).toHaveValue('line one\nline two')
   })
 })
 
@@ -370,6 +397,13 @@ describe('RunView integration (fake WebSocket + MSW)', () => {
 
   test('renders transcript, input box, and controls on mount', () => {
     renderRunView('run-mount')
+    expect(screen.getByTestId('run-view')).toHaveClass(
+      'h-[calc(100dvh-6rem)]',
+      'md:h-[calc(100dvh-7rem)]',
+      'overflow-hidden',
+    )
+    expect(screen.getByTestId('run-scroll-area')).toHaveClass('overflow-auto')
+    expect(screen.getByTestId('transcript')).not.toHaveClass('overflow-y-auto')
     expect(screen.getByTestId('transcript')).toBeInTheDocument()
     expect(screen.getByTestId('input-box')).toBeInTheDocument()
     expect(screen.getByTestId('stop-button')).toBeInTheDocument()

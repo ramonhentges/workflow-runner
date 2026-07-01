@@ -128,6 +128,53 @@ describe("start.run", () => {
     expect(params.branch).toBe("b");
   });
 
+  it("forwards --step as startStepId and still attaches on a TTY", async () => {
+    const runId = asRunId("rid-step");
+    const slug = asRunSlug("step-otter");
+    const mock = createMockClient({
+      responders: { "run.start": () => ({ runId, slug }) },
+    });
+    let attachedRunId: string | undefined;
+
+    const code = await start.run(["workflow.json", "--step", "review"], {
+      connect: async () => mock.asClient(),
+      isTty: () => true,
+      attach: async (_client, id) => {
+        attachedRunId = id;
+        return 0;
+      },
+      stdout: makeStream(),
+      stderr: makeStream(),
+    });
+
+    const startCall = mock.calls.find((call) => call.method === "run.start");
+    expect(code).toBe(0);
+    expect(startCall?.params).toEqual({
+      workflowPath: "workflow.json",
+      cwd: process.cwd(),
+      startStepId: "review",
+    });
+    expect(attachedRunId).toBe(runId);
+  });
+
+  it("omits startStepId from run.start when --step is absent", async () => {
+    const runId = asRunId("rid-plain");
+    const slug = asRunSlug("plain-otter");
+    const mock = createMockClient({
+      responders: { "run.start": () => ({ runId, slug }) },
+    });
+
+    await start.run(["workflow.json", "--detach"], {
+      connect: async () => mock.asClient(),
+      isTty: () => true,
+      stdout: makeStream(),
+      stderr: makeStream(),
+    });
+
+    const startCall = mock.calls.find((call) => call.method === "run.start");
+    expect("startStepId" in (startCall?.params ?? {})).toBe(false);
+  });
+
   it("forwards inline --prompt text as initialPrompt in run.start", async () => {
     const runId = asRunId("rid-prompt");
     const slug = asRunSlug("inline-otter");

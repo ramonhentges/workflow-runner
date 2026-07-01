@@ -119,6 +119,53 @@ describe("parseStartArgs", () => {
     }
   });
 
+  it("parses --step <id> alongside the workflow path", () => {
+    expect(parseStartArgs(["wf.json", "--step", "review"])).toEqual({
+      ok: true,
+      value: { workflowPath: "wf.json", detach: false, startStepId: "review" },
+    });
+  });
+
+  it("parses the --step=<id> form", () => {
+    expect(parseStartArgs(["wf.json", "--step=Review-Step"])).toEqual({
+      ok: true,
+      value: {
+        workflowPath: "wf.json",
+        detach: false,
+        startStepId: "Review-Step",
+      },
+    });
+  });
+
+  it("returns an error when --step is given without a value", () => {
+    expect(parseStartArgs(["wf.json", "--step"])).toEqual({
+      ok: false,
+      error: "--step requires a value",
+    });
+  });
+
+  it("returns an error when --step is immediately followed by a flag", () => {
+    expect(parseStartArgs(["wf.json", "--step", "--detach"])).toEqual({
+      ok: false,
+      error: "--step requires a value",
+    });
+  });
+
+  it("returns an error for an empty --step= value", () => {
+    expect(parseStartArgs(["wf.json", "--step="])).toEqual({
+      ok: false,
+      error: "--step requires a value",
+    });
+  });
+
+  it("omits startStepId from the parsed value when --step is absent", () => {
+    const result = parseStartArgs(["wf.json"]);
+    expect(result.ok).toBe(true);
+    if (result.ok && "value" in result) {
+      expect("startStepId" in result.value).toBe(false);
+    }
+  });
+
   it("parses --prompt <text> alongside the workflow path", () => {
     const result = parseStartArgs(["wf.json", "--prompt", "hello"]);
     expect(result).toEqual({

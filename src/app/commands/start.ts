@@ -37,7 +37,13 @@ export async function run(argv: string[], deps: StartDeps = {}): Promise<number>
     stdout.write(`${USAGE.start}\n`);
     return 0;
   }
-  const { workflowPath, detach, branch, initialPrompt: promptArg } = parsed.value;
+  const {
+    workflowPath,
+    detach,
+    branch,
+    startStepId,
+    initialPrompt: promptArg,
+  } = parsed.value;
 
   let initialPrompt: string | undefined;
   if (promptArg !== undefined) {
@@ -68,6 +74,7 @@ export async function run(argv: string[], deps: StartDeps = {}): Promise<number>
       cwd: process.cwd(),
       ...(branch !== undefined ? { branch } : {}),
       ...(initialPrompt !== undefined ? { initialPrompt } : {}),
+      ...(startStepId !== undefined ? { startStepId } : {}),
     });
   } catch (err) {
     stderr.write(`workflow-runner: ${formatStartError(err)}\n`);

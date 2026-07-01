@@ -7,6 +7,7 @@ export interface StartArgs {
   workflowPath: string;
   detach: boolean;
   branch?: string;
+  startStepId?: string;
   // Raw flag value: "-" (stdin), "@<path>" (file), or inline text. Resolved to
   // the actual prompt in commands/start.ts.
   initialPrompt?: string;
@@ -44,7 +45,8 @@ export interface DaemonArgs {
 
 export const USAGE = {
   start:
-    "Usage: workflow-runner start <workflow.json> [--branch <name>] [--prompt <text|-|@file>] [--detach|-d]\n" +
+    "Usage: workflow-runner start <workflow.json> [--branch <name>] [--step <step-id>] [--prompt <text|-|@file>] [--detach|-d]\n" +
+    "  --step <step-id> start at an exact workflow step id\n" +
     "  --prompt <text>   direct the run with inline text\n" +
     "  --prompt -        read the prompt from stdin\n" +
     "  --prompt @<file>  read the prompt from a file",
@@ -75,6 +77,7 @@ export function parseStartArgs(
   let workflowPath = "";
   let detach = false;
   let branch: string | undefined;
+  let startStepId: string | undefined;
   let initialPrompt: string | undefined;
   let i = 0;
   while (i < argv.length) {
@@ -113,6 +116,24 @@ export function parseStartArgs(
       i += 2;
       continue;
     }
+    if (arg === "--step") {
+      const value = argv[i + 1];
+      if (value === undefined || value.startsWith("-")) {
+        return { ok: false, error: "--step requires a value" };
+      }
+      startStepId = value;
+      i += 2;
+      continue;
+    }
+    if (arg.startsWith("--step=")) {
+      const value = arg.slice("--step=".length);
+      if (value === "") {
+        return { ok: false, error: "--step requires a value" };
+      }
+      startStepId = value;
+      i++;
+      continue;
+    }
     if (arg.startsWith("--branch=")) {
       const value = arg.slice("--branch=".length);
       if (value === "") {
@@ -137,6 +158,7 @@ export function parseStartArgs(
   }
   const value: StartArgs = { workflowPath, detach };
   if (branch !== undefined) value.branch = branch;
+  if (startStepId !== undefined) value.startStepId = startStepId;
   if (initialPrompt !== undefined) value.initialPrompt = initialPrompt;
   return { ok: true, value };
 }

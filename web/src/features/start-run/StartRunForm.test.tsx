@@ -601,6 +601,151 @@ describe('StartRunForm — picker selection', () => {
   })
 })
 
+describe('StartRunForm — start step selection', () => {
+  test('loads catalog steps and POSTs the selected exact startStepId', async () => {
+    const user = userEvent.setup()
+    useCwdStore.getState().addCwd('proj', '/projects/myapp')
+    let capturedBody: unknown
+    server.use(
+      http.get(`${BASE}/workflows`, () =>
+        HttpResponse.json({
+          workflows: [
+            { name: 'wf1.json', path: '/projects/myapp/workflows/wf1.json', scope: 'project' },
+          ],
+        }),
+      ),
+      http.get(`${BASE}/workflows/wf1`, () =>
+        HttpResponse.json({
+          name: 'wf1',
+          path: '/projects/myapp/workflows/wf1.json',
+          scope: 'project',
+          workflow: { steps: [{ id: 'plan' }, { id: 'review' }] },
+        }),
+      ),
+      http.post(`${BASE}/runs`, async ({ request }) => {
+        capturedBody = await request.json()
+        return HttpResponse.json({ runId: 'run-step', slug: 'step-slug' })
+      }),
+    )
+
+    renderForm()
+    await user.click(await screen.findByRole('combobox', { name: 'Workflow' }))
+    await user.click(await screen.findByRole('option', { name: /wf1\.json/ }))
+    await user.click(await screen.findByRole('combobox', { name: /start step/i }))
+    await user.click(screen.getByRole('option', { name: 'review' }))
+    await user.click(screen.getByRole('button', { name: /start run/i }))
+
+    await waitFor(() => {
+      expect(capturedBody).toEqual({
+        workflowPath: '/projects/myapp/workflows/wf1.json',
+        cwd: '/projects/myapp',
+        startStepId: 'review',
+      })
+    })
+  })
+
+  test('changing catalog workflow resets the selected start step to Default', async () => {
+    const user = userEvent.setup()
+    useCwdStore.getState().addCwd('proj', '/projects/myapp')
+    let capturedBody: unknown
+    server.use(
+      http.get(`${BASE}/workflows`, () =>
+        HttpResponse.json({
+          workflows: [
+            { name: 'alpha.json', path: '/projects/myapp/workflows/alpha.json', scope: 'project' },
+            { name: 'beta.json', path: '/projects/myapp/workflows/beta.json', scope: 'project' },
+          ],
+        }),
+      ),
+      http.get(`${BASE}/workflows/:name`, ({ params }) =>
+        HttpResponse.json({
+          name: params.name,
+          path: `/projects/myapp/workflows/${params.name}.json`,
+          scope: 'project',
+          workflow: { steps: [{ id: 'plan' }, { id: 'review' }] },
+        }),
+      ),
+      http.post(`${BASE}/runs`, async ({ request }) => {
+        capturedBody = await request.json()
+        return HttpResponse.json({ runId: 'run-reset', slug: 'reset-slug' })
+      }),
+    )
+
+    renderForm()
+    const workflowSelect = await screen.findByRole('combobox', { name: 'Workflow' })
+    await user.click(workflowSelect)
+    await user.click(await screen.findByRole('option', { name: /alpha\.json/ }))
+    await user.click(await screen.findByRole('combobox', { name: /start step/i }))
+    await user.click(screen.getByRole('option', { name: 'review' }))
+
+    await user.click(workflowSelect)
+    await user.click(await screen.findByRole('option', { name: /beta\.json/ }))
+    expect(await screen.findByRole('combobox', { name: /start step/i })).toHaveTextContent(
+      'Default (first step)',
+    )
+    await user.click(screen.getByRole('button', { name: /start run/i }))
+
+    await waitFor(() => {
+      expect(capturedBody).toEqual({
+        workflowPath: '/projects/myapp/workflows/beta.json',
+        cwd: '/projects/myapp',
+      })
+    })
+  })
+
+  test('POSTs an exact startStepId entered for a manual workflow path', async () => {
+    const user = userEvent.setup()
+    useCwdStore.getState().addCwd('proj', '/projects/myapp')
+    let capturedBody: unknown
+    server.use(
+      http.get(`${BASE}/workflows`, () => HttpResponse.json({ workflows: [] })),
+      http.post(`${BASE}/runs`, async ({ request }) => {
+        capturedBody = await request.json()
+        return HttpResponse.json({ runId: 'run-manual-step', slug: 'manual-step' })
+      }),
+    )
+
+    renderForm()
+    await user.type(await screen.findByLabelText(/workflow path/i), '/tmp/workflow.json')
+    await user.type(screen.getByRole('textbox', { name: /start step/i }), 'Review-Step')
+    await user.click(screen.getByRole('button', { name: /start run/i }))
+
+    await waitFor(() => {
+      expect(capturedBody).toEqual({
+        workflowPath: '/tmp/workflow.json',
+        cwd: '/projects/myapp',
+        startStepId: 'Review-Step',
+      })
+    })
+  })
+
+  test('retains manual workflow and start step values when start is rejected', async () => {
+    const user = userEvent.setup()
+    useCwdStore.getState().addCwd('proj', '/projects/myapp')
+    server.use(
+      http.get(`${BASE}/workflows`, () => HttpResponse.json({ workflows: [] })),
+      http.post(`${BASE}/runs`, () =>
+        HttpResponse.json(
+          { code: 'WORKFLOW_INVALID', message: "Start step 'missing' does not exist" },
+          { status: 400 },
+        ),
+      ),
+    )
+
+    const { router } = renderForm()
+    const path = await screen.findByLabelText(/workflow path/i)
+    const step = screen.getByRole('textbox', { name: /start step/i })
+    await user.type(path, '/tmp/workflow.json')
+    await user.type(step, 'missing')
+    await user.click(screen.getByRole('button', { name: /start run/i }))
+
+    expect(await screen.findByTestId('submit-error')).toHaveTextContent("Start step 'missing'")
+    expect(path).toHaveValue('/tmp/workflow.json')
+    expect(step).toHaveValue('missing')
+    expect(router.state.location.pathname).toBe('/start')
+  })
+})
+
 // ─── Unit/Integration: scoped picker ────────────────────────────────────────
 
 describe('StartRunForm — scoped picker', () => {

@@ -17,7 +17,10 @@ import {
 } from '@/components/ui/select'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import type { StartRunRequest, WorkflowScope } from '@/lib/api/types'
+import { useWorkflow } from '@/features/workflows/useWorkflow'
+import { workflowBareName } from '@/features/workflows/workflowNames'
 import { useWorkflows } from './useWorkflows'
+import { StartStepField } from './StartStepField'
 
 // The picker merges global and project workflows (ADR-001); a global and a
 // project workflow can share a name, so each option carries a scope badge as the
@@ -36,10 +39,19 @@ export function StartRunForm() {
   const [manualPath, setManualPath] = useState('')
   const [branch, setBranch] = useState('')
   const [initialPrompt, setInitialPrompt] = useState('')
+  const [startStepId, setStartStepId] = useState('')
   const [validationError, setValidationError] = useState('')
 
   const { data: workflowsData, isLoading: workflowsLoading, isError: workflowsError } = useWorkflows()
   const workflows = workflowsData?.workflows ?? []
+  const selectedWorkflow = workflows.find(workflow => workflow.path === selectedPath)
+  const selectedWorkflowName = selectedWorkflow
+    ? workflowBareName(selectedWorkflow)
+    : undefined
+  const selectedWorkflowQuery = useWorkflow(
+    selectedWorkflowName,
+    selectedWorkflow?.scope ?? 'project',
+  )
 
   const mutation = useMutation({
     mutationFn: (req: StartRunRequest) => startRun(req),
@@ -73,15 +85,17 @@ export function StartRunForm() {
     // A non-empty branch opts the run into git-worktree isolation (ADR-001);
     // leaving it blank starts a normal run in the active cwd.
     const trimmedBranch = branch.trim()
-    // An optional initial prompt directs the first step's agent (ADR-001). Shape
+    // An optional initial prompt directs the selected entry step's agent (ADR-001). Shape
     // it into the request only when non-empty, exactly like `branch`, so a blank
     // prompt keeps the no-prompt request byte-for-byte identical to today.
     const trimmedPrompt = initialPrompt.trim()
+    const hasStartStep = startStepId.trim().length > 0
     const req: StartRunRequest = {
       workflowPath,
       cwd: activeCwd!.path,
       ...(trimmedBranch ? { branch: trimmedBranch } : {}),
       ...(trimmedPrompt ? { initialPrompt: trimmedPrompt } : {}),
+      ...(hasStartStep ? { startStepId } : {}),
     }
     mutation.mutate(req)
   }
@@ -113,6 +127,7 @@ export function StartRunForm() {
                 onValueChange={value => {
                   setSelectedPath(value)
                   setManualPath('')
+                  setStartStepId('')
                   setValidationError('')
                 }}
               >
@@ -149,11 +164,24 @@ export function StartRunForm() {
               onChange={e => {
                 setManualPath(e.target.value)
                 setSelectedPath('')
+                setStartStepId('')
                 setValidationError('')
               }}
               placeholder="/path/to/workflow.json"
             />
           </div>
+
+          <StartStepField
+            mode={selectedWorkflow ? 'catalog' : 'manual'}
+            value={startStepId}
+            onValueChange={value => {
+              setStartStepId(value)
+              setValidationError('')
+            }}
+            workflow={selectedWorkflowQuery.data?.workflow}
+            isLoading={selectedWorkflowQuery.isLoading}
+            isError={selectedWorkflowQuery.isError}
+          />
 
           <div className="flex flex-col gap-2">
             <Label htmlFor="branch-input">Branch (optional)</Label>
@@ -185,8 +213,8 @@ export function StartRunForm() {
               rows={3}
             />
             <p className="text-xs text-muted-foreground">
-              Sent to the first step's agent as a user request for this run. Leave blank to start
-              the workflow as-is.
+              Sent to the selected start step as a user request for this run. Leave blank to start
+              without an additional request.
             </p>
           </div>
 

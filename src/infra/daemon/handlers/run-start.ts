@@ -12,6 +12,7 @@ export function createRunStartHandler(rm: RunManager): RpcHandler<"run.start"> {
         params.cwd,
         params.branch,
         params.initialPrompt,
+        params.startStepId,
       );
     } catch (e) {
       if (e instanceof RunManagerError) {

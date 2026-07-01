@@ -236,6 +236,16 @@ export function StepFields({
           )}
         </div>
 
+        <div className="flex flex-col gap-1">
+          <Label htmlFor={`step-variant-${stepIndex}`}>Model variant</Label>
+          <Input
+            id={`step-variant-${stepIndex}`}
+            {...register(`steps.${stepIndex}.variant`)}
+            placeholder="default"
+            data-testid={`step-variant-input-${stepIndex}`}
+          />
+        </div>
+
         <div className="flex flex-col gap-1 col-span-2">
           <Label htmlFor={`step-description-${stepIndex}`}>Description</Label>
           <Textarea

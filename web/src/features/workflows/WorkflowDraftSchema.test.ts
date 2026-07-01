@@ -18,6 +18,7 @@ function validDraft() {
         id: 'step-1',
         agent: 'architect-advisor',
         model: 'big-model',
+        variant: '',
         ide: 'claude-code',
         mode: 'interactive' as const,
         description: '',
@@ -246,6 +247,7 @@ describe('workflowDocToFormData', () => {
           id: 'step-1',
           agent: 'architect',
           model: 'big-model',
+          variant: 'high',
           ide: 'claude-code',
           mode: 'interactive',
           description: 'First step',
@@ -274,9 +276,11 @@ describe('workflowDocToFormData', () => {
     expect(form.steps).toHaveLength(2)
     expect(form.steps[0].id).toBe('step-1')
     expect(form.steps[0].agent).toBe('architect')
+    expect(form.steps[0].variant).toBe('high')
     expect(form.steps[0].edges).toHaveLength(1)
     expect(form.steps[0].edges[0].next_step).toBe('step-2')
     expect(form.steps[1].mode).toBe('autonomous')
+    expect(form.steps[1].variant).toBe('')
   })
 
   test('override fileName replaces the doc name', () => {
@@ -321,6 +325,7 @@ describe('workflowDocToFormData', () => {
 describe('toWorkflowPayload', () => {
   test('converts form data to the workflow JSON payload', () => {
     const draft = validDraft()
+    draft.steps[0].variant = 'high'
     const payload = toWorkflowPayload(draft) as Record<string, unknown>
     expect(payload.id).toBe('my-flow')
     expect(payload.name).toBe('My Flow')
@@ -330,5 +335,13 @@ describe('toWorkflowPayload', () => {
     expect(steps).toHaveLength(1)
     expect(steps[0].id).toBe('step-1')
     expect(steps[0].mode).toBe('interactive')
+    expect(steps[0].variant).toBe('high')
+  })
+
+  test('omits variant from the workflow JSON payload when it is blank', () => {
+    const payload = toWorkflowPayload(validDraft()) as Record<string, unknown>
+    const steps = payload.steps as Array<Record<string, unknown>>
+
+    expect(steps[0]).not.toHaveProperty('variant')
   })
 })

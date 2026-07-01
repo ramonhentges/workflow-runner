@@ -355,6 +355,7 @@ describe('WorkflowEditor — save success', () => {
     await user.type(screen.getByTestId(`step-id-input-${stepIdx}`), 'step-1')
     await user.type(screen.getByTestId(`step-agent-input-${stepIdx}`), 'my-agent')
     await user.type(screen.getByTestId(`step-model-input-${stepIdx}`), 'my-model')
+    await user.type(screen.getByTestId(`step-variant-input-${stepIdx}`), 'high')
 
     await user.click(screen.getByTestId('save-button'))
 
@@ -362,7 +363,10 @@ describe('WorkflowEditor — save success', () => {
       expect(router.state.location.pathname).toBe('/workflows')
     })
 
-    expect(capturedBody).toMatchObject({ name: 'new-flow' })
+    expect(capturedBody).toMatchObject({
+      name: 'new-flow',
+      workflow: { steps: [{ variant: 'high' }] },
+    })
   })
 
   test('a successful edit calls updateWorkflow and navigates to the workflows list', async () => {

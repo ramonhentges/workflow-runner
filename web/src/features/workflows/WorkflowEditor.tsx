@@ -256,6 +256,7 @@ export function WorkflowEditor({
                     id: '',
                     agent: '',
                     model: '',
+                    variant: '',
                     ide: readLastIde(),
                     mode: 'interactive',
                     description: '',

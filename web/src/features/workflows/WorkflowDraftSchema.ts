@@ -10,6 +10,7 @@ export const StepDraftSchema = z.object({
   id: z.string().min(1, 'Step ID is required'),
   agent: z.string().min(1, 'Agent is required'),
   model: z.string().min(1, 'Model is required'),
+  variant: z.string().optional(),
   ide: z.string().min(1, 'IDE is required'),
   mode: z.enum(['interactive', 'autonomous']),
   description: z.string(),
@@ -104,6 +105,7 @@ export function workflowDocToFormData(
         id: typeof s.id === 'string' ? s.id : '',
         agent: typeof s.agent === 'string' ? s.agent : '',
         model: typeof s.model === 'string' ? s.model : '',
+        variant: typeof s.variant === 'string' ? s.variant : '',
         ide: typeof s.ide === 'string' ? s.ide : '',
         mode:
           s.mode === 'interactive' || s.mode === 'autonomous'
@@ -134,6 +136,7 @@ export function toWorkflowPayload(data: WorkflowDraft): unknown {
       id: step.id,
       agent: step.agent,
       model: step.model,
+      ...(step.variant ? { variant: step.variant } : {}),
       ide: step.ide,
       mode: step.mode,
       description: step.description,

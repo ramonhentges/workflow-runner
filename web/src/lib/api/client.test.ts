@@ -146,6 +146,24 @@ describe('startRun', () => {
     expect(result).toEqual({ runId: 'run-123', slug: 'abc-def' })
     expect(capturedBody).toEqual({ workflowPath: '/tmp/wf.json', cwd: '/tmp' })
   })
+
+  test('serializes an exact startStepId when provided', async () => {
+    let capturedBody: unknown = null
+    server.use(
+      http.post(`${BASE}/runs`, async ({ request }) => {
+        capturedBody = await request.json()
+        return HttpResponse.json({ runId: 'run-123', slug: 'abc-def' }, { status: 201 })
+      }),
+    )
+
+    await startRun({ workflowPath: '/tmp/wf.json', cwd: '/tmp', startStepId: 'Review-Step' })
+
+    expect(capturedBody).toEqual({
+      workflowPath: '/tmp/wf.json',
+      cwd: '/tmp',
+      startStepId: 'Review-Step',
+    })
+  })
 })
 
 describe('getRun', () => {

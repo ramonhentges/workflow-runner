@@ -101,6 +101,9 @@ export interface StartRunRequest {
   // "user request for this run" (ADR-001). Omitted ⇒ today's behavior; the
   // first step receives only the workflow's static description.
   initialPrompt?: string
+  // Optional exact workflow step id to use as the fresh run's entry point.
+  // Omitted means the first configured step.
+  startStepId?: string
 }
 
 // Scope discriminator mirroring the server `WorkflowScope` (src/app/api/schema.ts,

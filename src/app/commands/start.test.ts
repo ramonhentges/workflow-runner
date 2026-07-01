@@ -613,17 +613,29 @@ describe("start.run", () => {
     });
     const stdout = makeStream();
     const stderr = makeStream();
+    let attachCalls = 0;
 
-    const code = await start.run(["bad.json", "--detach"], {
+    const code = await start.run(["bad.json", "--step", "missing"], {
       connect: async () => mock.asClient(),
-      isTty: () => false,
+      isTty: () => true,
+      attach: async () => {
+        attachCalls++;
+        return 0;
+      },
       stdout,
       stderr,
     });
 
     expect(code).toBe(1);
+    const startCall = mock.calls.find(call => call.method === "run.start");
+    expect(startCall?.params).toEqual({
+      workflowPath: "bad.json",
+      cwd: process.cwd(),
+      startStepId: "missing",
+    });
     expect(stderr.chunks.join("")).toContain("workflow invalid");
     expect(stderr.chunks.join("")).toContain("missing 'steps'");
     expect(mock.closed).toBe(true);
+    expect(attachCalls).toBe(0);
   });
 });

@@ -178,7 +178,18 @@ describe("RunManager", () => {
     await record.runPromise;
 
     expect(enteredSteps).toEqual([asStepId("step-2")]);
-    expect(record.run.snapshot().visitedStepIds).toEqual([asStepId("step-2")]);
+    const snapshot = record.run.snapshot();
+    expect(snapshot.currentStepId).toBe(asStepId("step-2"));
+    expect(snapshot.visitedStepIds).toEqual([asStepId("step-2")]);
+
+    const eventLog = await manager.openEventLog(runId);
+    if (!eventLog) throw new Error("event log not found");
+    const { entries } = await eventLog.readEventsSince(0);
+    const bannerStepIds = entries
+      .filter(entry => entry.event.type === "banner")
+      .map(entry => entry.event.type === "banner" ? entry.event.step.id : null);
+    expect(bannerStepIds).toEqual([asStepId("step-2")]);
+    await eventLog.close();
 
     await manager.shutdown();
   });

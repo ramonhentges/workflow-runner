@@ -17,8 +17,8 @@ import {
   type RunnerObserver,
   type RunSummary,
 } from "../../domain/runner.js";
-import type { StepId } from "../../domain/ids.js";
-import { Workflow } from "../../domain/workflow.js";
+import { asStepId, type StepId } from "../../domain/ids.js";
+import { Workflow, WorkflowConfigError } from "../../domain/workflow.js";
 import { McpServer } from "../mcp/mcp-server.js";
 import {
   GitWorktreeError,
@@ -155,6 +155,7 @@ export class RunManager {
     cwd: string,
     branch?: string,
     initialPrompt?: string,
+    startStepId?: string,
   ): Promise<{ runId: RunId; slug: RunSlug }> {
     if (!isAbsolute(cwd)) {
       throw new RunManagerError("CWD_INVALID", `cwd must be an absolute path: ${cwd}`);
@@ -231,6 +232,13 @@ export class RunManager {
     }
 
     const workflow = await Workflow.load(workflowPath);
+    const entryStepId =
+      startStepId === undefined ? workflow.firstStepId() : asStepId(startStepId);
+    if (!workflow.hasStep(entryStepId)) {
+      throw new WorkflowConfigError(
+        `Start step '${startStepId}' does not exist in workflow`,
+      );
+    }
 
     let runId: RunId;
     let slug: RunSlug;
@@ -328,7 +336,7 @@ export class RunManager {
     record.runPromise = this.#launchRunner(
       runner,
       record,
-      workflow.firstStepId(),
+      entryStepId,
       prompt ?? null,
       "user-request",
     );

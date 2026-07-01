@@ -10,6 +10,7 @@ import type { RunId, RunSlug, RunSnapshot } from "../../domain/run.js";
 import type { StepOutcome } from "../../domain/outcome.js";
 import type { StepId } from "../../domain/ids.js";
 import { asStepId, asStepToken } from "../../domain/ids.js";
+import { WorkflowConfigError } from "../../domain/workflow.js";
 import type { EventLogEntry } from "./event-log.js";
 import { RpcErrorCode } from "./protocol.js";
 import {
@@ -152,6 +153,84 @@ describe("RunManager", () => {
 
     expect(capturedArgs).toHaveLength(1);
     expect(capturedArgs[0]!.cwd).toBe(tmpDir);
+
+    await manager.shutdown();
+  });
+
+  it("startRun enters the requested workflow step without visiting predecessors", async () => {
+    const wfPath = await writeWorkflow(tmpDir, "wf.json", TWO_STEP_WORKFLOW);
+    const enteredSteps: StepId[] = [];
+    const factory = new FakeSessionFactory({
+      onCreate: (args) => enteredSteps.push(args.step.id),
+      resolveOutcome: () => ({ kind: "finish", message: "done" }),
+    });
+    const manager = new RunManager(tmpDir, factory);
+
+    const { runId } = await manager.startRun(
+      wfPath,
+      tmpDir,
+      undefined,
+      undefined,
+      "step-2",
+    );
+    const record = manager.get(runId);
+    if (!record) throw new Error("record not found");
+    await record.runPromise;
+
+    expect(enteredSteps).toEqual([asStepId("step-2")]);
+    expect(record.run.snapshot().visitedStepIds).toEqual([asStepId("step-2")]);
+
+    await manager.shutdown();
+  });
+
+  it("startRun frames an initial prompt for the requested entry as a user request", async () => {
+    const wfPath = await writeWorkflow(tmpDir, "wf.json", TWO_STEP_WORKFLOW);
+    const capturedArgs: RunnerAgentSessionArgs[] = [];
+    const factory = new FakeSessionFactory({
+      onCreate: (args) => capturedArgs.push(args),
+      resolveOutcome: () => ({ kind: "finish", message: "done" }),
+    });
+    const manager = new RunManager(tmpDir, factory);
+
+    const { runId } = await manager.startRun(
+      wfPath,
+      tmpDir,
+      undefined,
+      "review PR #42",
+      "step-2",
+    );
+    const record = manager.get(runId);
+    if (!record) throw new Error("record not found");
+    await record.runPromise;
+
+    expect(capturedArgs[0]!.step.id).toBe(asStepId("step-2"));
+    expect(capturedArgs[0]!.inbound).toEqual({
+      message: "review PR #42",
+      kind: "user-request",
+    });
+
+    await manager.shutdown();
+  });
+
+  it("startRun rejects an unknown entry step before creating run or worktree state", async () => {
+    const wfPath = await writeWorkflow(tmpDir, "wf.json", TWO_STEP_WORKFLOW);
+    const git = new FakeGitWorktrees({ repoRoots: { [tmpDir]: tmpDir } });
+    const manager = new RunManager(tmpDir, new FakeSessionFactory(), {
+      gitWorktrees: git,
+    });
+
+    const err = await manager
+      .startRun(wfPath, tmpDir, "feature", undefined, "missing-step")
+      .catch((error) => error);
+
+    expect(err).toBeInstanceOf(WorkflowConfigError);
+    expect(err.message).toContain("missing-step");
+    expect(manager.list()).toHaveLength(0);
+    expect(git.addWorktreeCalls).toHaveLength(0);
+    const remainingRunDirs = await readdir(join(tmpDir, "runs")).catch(
+      () => [] as string[],
+    );
+    expect(remainingRunDirs).toHaveLength(0);
 
     await manager.shutdown();
   });

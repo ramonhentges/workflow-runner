@@ -175,6 +175,25 @@ describe("start.run", () => {
     expect("startStepId" in (startCall?.params ?? {})).toBe(false);
   });
 
+  it("rejects a missing --step value before connecting and prints supported usage", async () => {
+    let connectCalls = 0;
+    const stderr = makeStream();
+
+    const code = await start.run(["workflow.json", "--step"], {
+      connect: async () => {
+        connectCalls++;
+        throw new Error("connect must not be reached");
+      },
+      stdout: makeStream(),
+      stderr,
+    });
+
+    expect(code).toBe(1);
+    expect(connectCalls).toBe(0);
+    expect(stderr.chunks.join("")).toContain("--step requires a value");
+    expect(stderr.chunks.join("")).toContain("[--step <step-id>]");
+  });
+
   it("forwards inline --prompt text as initialPrompt in run.start", async () => {
     const runId = asRunId("rid-prompt");
     const slug = asRunSlug("inline-otter");

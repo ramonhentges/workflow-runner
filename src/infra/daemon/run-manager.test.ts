@@ -73,7 +73,7 @@ const TWO_STEP_WORKFLOW = JSON.stringify({
       mode: "autonomous",
       ide: "vscode",
       model: "test-model",
-      edges: [{ next_step: "step-2", intent: "go to step 2" }],
+      edges: [],
     },
     {
       id: "step-2",
@@ -157,7 +157,7 @@ describe("RunManager", () => {
     await manager.shutdown();
   });
 
-  it("startRun enters the requested workflow step without visiting predecessors", async () => {
+  it("startRun enters an unreachable requested step without visiting predecessors", async () => {
     const wfPath = await writeWorkflow(tmpDir, "wf.json", TWO_STEP_WORKFLOW);
     const enteredSteps: StepId[] = [];
     const factory = new FakeSessionFactory({
@@ -194,6 +194,36 @@ describe("RunManager", () => {
     await manager.shutdown();
   });
 
+  it("explicitly selecting the configured first step is equivalent to omission", async () => {
+    const wfPath = await writeWorkflow(tmpDir, "wf.json", SINGLE_STEP_WORKFLOW);
+    const enteredSteps: StepId[] = [];
+    const factory = new FakeSessionFactory({
+      onCreate: args => enteredSteps.push(args.step.id),
+      resolveOutcome: () => ({ kind: "finish", message: "done" }),
+    });
+    const manager = new RunManager(tmpDir, factory);
+
+    const omitted = await manager.startRun(wfPath, tmpDir);
+    const explicit = await manager.startRun(
+      wfPath,
+      tmpDir,
+      undefined,
+      undefined,
+      "step-1",
+    );
+    const omittedRecord = manager.get(omitted.runId);
+    const explicitRecord = manager.get(explicit.runId);
+    if (!omittedRecord || !explicitRecord) throw new Error("record not found");
+    await Promise.all([omittedRecord.runPromise, explicitRecord.runPromise]);
+
+    expect(enteredSteps).toEqual([asStepId("step-1"), asStepId("step-1")]);
+    expect(omittedRecord.run.snapshot().visitedStepIds).toEqual(
+      explicitRecord.run.snapshot().visitedStepIds,
+    );
+
+    await manager.shutdown();
+  });
+
   it("startRun frames an initial prompt for the requested entry as a user request", async () => {
     const wfPath = await writeWorkflow(tmpDir, "wf.json", TWO_STEP_WORKFLOW);
     const capturedArgs: RunnerAgentSessionArgs[] = [];
@@ -226,8 +256,14 @@ describe("RunManager", () => {
   it("startRun rejects an unknown entry step before creating run or worktree state", async () => {
     const wfPath = await writeWorkflow(tmpDir, "wf.json", TWO_STEP_WORKFLOW);
     const git = new FakeGitWorktrees({ repoRoots: { [tmpDir]: tmpDir } });
-    const manager = new RunManager(tmpDir, new FakeSessionFactory(), {
+    const factory = new FakeSessionFactory();
+    let mcpCreateCalls = 0;
+    const manager = new RunManager(tmpDir, factory, {
       gitWorktrees: git,
+      createMcpServer: async () => {
+        mcpCreateCalls++;
+        throw new Error("MCP creation must not be reached");
+      },
     });
 
     const err = await manager
@@ -237,6 +273,8 @@ describe("RunManager", () => {
     expect(err).toBeInstanceOf(WorkflowConfigError);
     expect(err.message).toContain("missing-step");
     expect(manager.list()).toHaveLength(0);
+    expect(factory.createCallCount).toBe(0);
+    expect(mcpCreateCalls).toBe(0);
     expect(git.addWorktreeCalls).toHaveLength(0);
     const remainingRunDirs = await readdir(join(tmpDir, "runs")).catch(
       () => [] as string[],

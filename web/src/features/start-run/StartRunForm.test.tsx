@@ -628,7 +628,7 @@ describe('StartRunForm — start step selection', () => {
       }),
     )
 
-    renderForm()
+    const { router } = renderForm()
     await user.click(await screen.findByRole('combobox', { name: 'Workflow' }))
     await user.click(await screen.findByRole('option', { name: /wf1\.json/ }))
     await user.click(await screen.findByRole('combobox', { name: /start step/i }))
@@ -642,6 +642,7 @@ describe('StartRunForm — start step selection', () => {
         startStepId: 'review',
       })
     })
+    expect(router.state.location.pathname).toBe('/runs/run-step')
   })
 
   test('changing catalog workflow resets the selected start step to Default', async () => {
@@ -743,6 +744,45 @@ describe('StartRunForm — start step selection', () => {
     expect(path).toHaveValue('/tmp/workflow.json')
     expect(step).toHaveValue('missing')
     expect(router.state.location.pathname).toBe('/start')
+  })
+
+  test('falls back from a catalog detail error to manual path and step entry', async () => {
+    const user = userEvent.setup()
+    useCwdStore.getState().addCwd('proj', '/projects/myapp')
+    let capturedBody: unknown
+    server.use(
+      http.get(`${BASE}/workflows`, () =>
+        HttpResponse.json({
+          workflows: [
+            { name: 'broken.json', path: '/projects/myapp/workflows/broken.json', scope: 'project' },
+          ],
+        }),
+      ),
+      http.get(`${BASE}/workflows/broken`, () =>
+        HttpResponse.json({ code: 'BROKEN', message: 'cannot read workflow' }, { status: 500 }),
+      ),
+      http.post(`${BASE}/runs`, async ({ request }) => {
+        capturedBody = await request.json()
+        return HttpResponse.json({ runId: 'manual-fallback', slug: 'fallback' })
+      }),
+    )
+
+    renderForm()
+    await user.click(await screen.findByRole('combobox', { name: 'Workflow' }))
+    await user.click(await screen.findByRole('option', { name: /broken\.json/ }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(/start at the first step/i)
+
+    await user.type(screen.getByLabelText(/enter a path manually/i), '/tmp/fallback.json')
+    await user.type(screen.getByRole('textbox', { name: /start step/i }), 'recover')
+    await user.click(screen.getByRole('button', { name: /start run/i }))
+
+    await waitFor(() => {
+      expect(capturedBody).toEqual({
+        workflowPath: '/tmp/fallback.json',
+        cwd: '/projects/myapp',
+        startStepId: 'recover',
+      })
+    })
   })
 })
 

@@ -117,6 +117,43 @@ describe("StartRunRequestSchema", () => {
     expect(result.success).toBe(true);
     if (result.success) expect(result.data.branch).toBe("feature/iso");
   });
+
+  it("accepts and preserves an exact startStepId", () => {
+    const result = StartRunRequestSchema.safeParse({
+      workflowPath: "/wf.json",
+      cwd: "/home/user",
+      startStepId: "Review-Step",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.startStepId).toBe("Review-Step");
+  });
+
+  it("accepts a body without startStepId", () => {
+    const result = StartRunRequestSchema.safeParse({
+      workflowPath: "/wf.json",
+      cwd: "/home/user",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.startStepId).toBeUndefined();
+  });
+
+  it("rejects an empty startStepId", () => {
+    const result = StartRunRequestSchema.safeParse({
+      workflowPath: "/wf.json",
+      cwd: "/home/user",
+      startStepId: "",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a non-string startStepId", () => {
+    const result = StartRunRequestSchema.safeParse({
+      workflowPath: "/wf.json",
+      cwd: "/home/user",
+      startStepId: 2,
+    });
+    expect(result.success).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------

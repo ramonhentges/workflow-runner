@@ -15,7 +15,13 @@ import { asRunId, asRunSlug } from "../../../domain/run.js";
 // Helpers
 // ---------------------------------------------------------------------------
 
-type StartRunFn = (workflowPath: string, cwd: string, branch?: string, initialPrompt?: string) => Promise<{ runId: ReturnType<typeof asRunId>; slug: ReturnType<typeof asRunSlug> }>;
+type StartRunFn = (
+  workflowPath: string,
+  cwd: string,
+  branch?: string,
+  initialPrompt?: string,
+  startStepId?: string,
+) => Promise<{ runId: ReturnType<typeof asRunId>; slug: ReturnType<typeof asRunSlug> }>;
 
 function makeRm(startRunImpl: StartRunFn): RunManager {
   return {
@@ -158,6 +164,75 @@ describe("POST /runs — unit", () => {
     });
 
     expect(capturedPrompt).toBeUndefined();
+  });
+
+  it("forwards the startStepId from the body to startRun", async () => {
+    let capturedStartStepId: string | undefined = "UNSET";
+    const rm = makeRm(async (_wp, _cwd, _branch, _prompt, startStepId) => {
+      capturedStartStepId = startStepId;
+      return { runId: asRunId("run001"), slug: asRunSlug("brave-otter") };
+    });
+    const app = createApiApp(rm);
+
+    const res = await postRuns(app, {
+      workflowPath: "/workspace/workflow.json",
+      cwd: "/workspace/myproject",
+      startStepId: "review",
+    });
+
+    expect(res.status).toBe(201);
+    expect(capturedStartStepId).toBe("review");
+  });
+
+  it("forwards undefined startStepId when the body omits it", async () => {
+    let capturedStartStepId: string | undefined = "UNSET";
+    const rm = makeRm(async (_wp, _cwd, _branch, _prompt, startStepId) => {
+      capturedStartStepId = startStepId;
+      return { runId: asRunId("run001"), slug: asRunSlug("brave-otter") };
+    });
+    const app = createApiApp(rm);
+
+    const res = await postRuns(app, {
+      workflowPath: "/workspace/workflow.json",
+      cwd: "/workspace/myproject",
+    });
+
+    expect(res.status).toBe(201);
+    expect(capturedStartStepId).toBeUndefined();
+  });
+
+  it("returns 400 without calling startRun when startStepId is empty", async () => {
+    let startRunCalled = false;
+    const app = createApiApp(makeRm(async () => {
+      startRunCalled = true;
+      return { runId: asRunId("run001"), slug: asRunSlug("brave-otter") };
+    }));
+
+    const res = await postRuns(app, {
+      workflowPath: "/workspace/workflow.json",
+      cwd: "/workspace/myproject",
+      startStepId: "",
+    });
+
+    expect(res.status).toBe(400);
+    expect(startRunCalled).toBe(false);
+  });
+
+  it("returns 400 without calling startRun when startStepId is not a string", async () => {
+    let startRunCalled = false;
+    const app = createApiApp(makeRm(async () => {
+      startRunCalled = true;
+      return { runId: asRunId("run001"), slug: asRunSlug("brave-otter") };
+    }));
+
+    const res = await postRuns(app, {
+      workflowPath: "/workspace/workflow.json",
+      cwd: "/workspace/myproject",
+      startStepId: 2,
+    });
+
+    expect(res.status).toBe(400);
+    expect(startRunCalled).toBe(false);
   });
 
   it("returns 400 when initialPrompt is not a string", async () => {
@@ -339,7 +414,89 @@ function makeWorkflowJson(id: string, description: string): string {
   });
 }
 
+function makeTwoStepWorkflowJson(): string {
+  return JSON.stringify({
+    id: "start-from-step",
+    name: "Start from step",
+    description: "Test",
+    version: "1",
+    steps: [
+      {
+        id: "s1",
+        agent: "fake/AGENT",
+        model: "fake/model",
+        mode: "autonomous",
+        ide: "fake",
+        description: "fake:complete",
+        edges: [],
+      },
+      {
+        id: "s2",
+        agent: "fake/AGENT",
+        model: "fake/model",
+        mode: "autonomous",
+        ide: "fake",
+        description: "fake:complete",
+        edges: [],
+      },
+    ],
+  });
+}
+
 describe("POST /runs — integration (real RunManager)", () => {
+  it("starts at startStepId and does not visit its predecessor", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "start-run-it-"));
+    const storageRoot = join(tempDir, "workflow-runner");
+    mkdirSync(storageRoot, { recursive: true });
+    const manager = new RunManager(storageRoot, new FixtureSessionFactory());
+    try {
+      const wfPath = join(storageRoot, "test.json");
+      await Bun.write(wfPath, makeTwoStepWorkflowJson());
+
+      const res = await postRuns(createApiApp(manager), {
+        workflowPath: wfPath,
+        cwd: storageRoot,
+        startStepId: "s2",
+      });
+
+      expect(res.status).toBe(201);
+      const body = await res.json() as { runId: string };
+      const active = manager.get(body.runId);
+      if (!active) throw new Error("run not found");
+      await active.runPromise;
+      expect(active.run.snapshot().visitedStepIds).toEqual(["s2"]);
+    } finally {
+      await manager.shutdown();
+      await rm(tempDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
+  it("rejects an unknown startStepId without creating a run", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "start-run-it-"));
+    const storageRoot = join(tempDir, "workflow-runner");
+    mkdirSync(storageRoot, { recursive: true });
+    const manager = new RunManager(storageRoot, new FixtureSessionFactory());
+    try {
+      const wfPath = join(storageRoot, "test.json");
+      await Bun.write(wfPath, makeTwoStepWorkflowJson());
+
+      const res = await postRuns(createApiApp(manager), {
+        workflowPath: wfPath,
+        cwd: storageRoot,
+        startStepId: "missing",
+      });
+
+      expect(res.status).toBe(400);
+      const body = await res.json() as { code: string; message: string };
+      expect(body.code).toBe("WORKFLOW_INVALID");
+      expect(body.message).toContain("missing");
+      expect(manager.list()).toHaveLength(0);
+    } finally {
+      await manager.shutdown();
+      await rm(tempDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
   it("starts a run and returns 201 with { runId, slug }", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "start-run-it-"));
     const storageRoot = join(tempDir, "workflow-runner");

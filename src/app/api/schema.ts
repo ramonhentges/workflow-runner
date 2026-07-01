@@ -99,11 +99,14 @@ export type ClientFrame = z.infer<typeof ClientFrameSchema>;
 // `initialPrompt` is optional free text delivered to the entry step as the
 // run's "User request" (ADR-003). An omitted/blank prompt is dropped by the
 // caller, so the no-prompt path is unchanged; a non-string is rejected here.
+// `startStepId` is an exact workflow step identifier. Do not trim it: workflow
+// IDs are case-sensitive map keys and the manager validates membership.
 export const StartRunRequestSchema = z.object({
   workflowPath: z.string().min(1),
   cwd: z.string().min(1),
   branch: z.string().trim().min(1).optional(),
   initialPrompt: z.string().optional(),
+  startStepId: z.string().min(1).optional(),
 });
 export type StartRunRequest = z.infer<typeof StartRunRequestSchema>;
 

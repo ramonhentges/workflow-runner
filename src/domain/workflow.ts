@@ -15,6 +15,7 @@ export interface Step {
   mode: StepMode;
   ide: string;
   model: string;
+  variant?: string;
   edges: Edge[];
 }
 
@@ -149,6 +150,15 @@ function validateStep(rawStep: unknown, existingIds: Set<StepId>): Step {
     throw new WorkflowConfigError(`Step '${s.id}': missing or empty 'model'`);
   }
 
+  if (
+    s.variant !== undefined &&
+    (typeof s.variant !== "string" || s.variant.trim() === "")
+  ) {
+    throw new WorkflowConfigError(
+      `Step '${s.id}': 'variant' must be a non-empty string when provided`,
+    );
+  }
+
   if (typeof s.ide !== "string" || s.ide.trim() === "") {
     throw new WorkflowConfigError(`Step '${s.id}': missing or empty 'ide'`);
   }
@@ -166,6 +176,7 @@ function validateStep(rawStep: unknown, existingIds: Set<StepId>): Step {
     mode: s.mode,
     ide: s.ide,
     model: s.model,
+    ...(typeof s.variant === "string" ? { variant: s.variant } : {}),
     edges: [],
   };
 }

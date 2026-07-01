@@ -5,11 +5,14 @@ import { UnknownIdeError } from "./ide-profile.js";
 import { asSessionId, asStepId } from "../../domain/ids.js";
 import type { Step } from "../../domain/workflow.js";
 
-function makeStep(overrides: Partial<Pick<Step, "id" | "agent" | "model">> = {}): Step {
+function makeStep(
+  overrides: Partial<Pick<Step, "id" | "agent" | "model" | "variant">> = {},
+): Step {
   return {
     id: asStepId(overrides.id ?? "test-step"),
     agent: overrides.agent ?? "test-agent",
     model: overrides.model ?? "test-model",
+    ...(overrides.variant === undefined ? {} : { variant: overrides.variant }),
     mode: "autonomous",
     ide: "opencode",
     description: "test step",
@@ -20,6 +23,11 @@ function makeStep(overrides: Partial<Pick<Step, "id" | "agent" | "model">> = {})
 function makeStubConnection(overrides: {
   setSessionMode?: (args: { sessionId: string; modeId: string }) => Promise<void>;
   unstable_setSessionModel?: (args: { sessionId: string; modelId: string }) => Promise<void>;
+  setSessionConfigOption?: (args: {
+    sessionId: string;
+    configId: string;
+    value: string;
+  }) => Promise<unknown>;
 } = {}): { conn: ClientSideConnection; calls: string[] } {
   const calls: string[] = [];
   const conn = {
@@ -28,6 +36,10 @@ function makeStubConnection(overrides: {
     }),
     unstable_setSessionModel: overrides.unstable_setSessionModel ?? (async ({ modelId }: { sessionId: string; modelId: string }) => {
       calls.push(`unstable_setSessionModel:${modelId}`);
+    }),
+    setSessionConfigOption: overrides.setSessionConfigOption ?? (async ({ configId, value }: { sessionId: string; configId: string; value: string }) => {
+      calls.push(`setSessionConfigOption:${configId}:${value}`);
+      return { configOptions: [] };
     }),
   } as unknown as ClientSideConnection;
   return { conn, calls };
@@ -240,6 +252,124 @@ describe.each(standardProfiles)(
 
       expect(calls).toContain(`setSessionMode:${agent}`);
       expect(calls).toContain(`unstable_setSessionModel:${model}`);
+    });
+
+    it("sets an advertised thought-level option to step.variant after the model", async () => {
+      const profile = resolveIdeProfile(ide);
+      const session = {
+        sessionId: sid,
+        configOptions: [
+          {
+            id: "reasoning-effort",
+            name: "Reasoning effort",
+            category: "thought_level",
+            type: "select",
+            currentValue: "medium",
+            options: [
+              { value: "low", name: "Low" },
+              { value: "high", name: "High" },
+            ],
+          },
+        ],
+      } as unknown as NewSessionResponse;
+
+      const { conn, calls } = makeStubConnection();
+      const step = makeStep({ agent, model, variant: "high" });
+
+      await profile.configureSession({
+        connection: conn,
+        sessionId,
+        session,
+        step,
+        log: () => {},
+      });
+
+      expect(calls).toEqual([
+        `setSessionMode:${agent}`,
+        `unstable_setSessionModel:${model}`,
+        "setSessionConfigOption:reasoning-effort:high",
+      ]);
+    });
+
+    it("does not set a session config option when step.variant is omitted", async () => {
+      const profile = resolveIdeProfile(ide);
+      const session = {
+        sessionId: sid,
+        configOptions: [
+          {
+            id: "reasoning-effort",
+            name: "Reasoning effort",
+            category: "thought_level",
+            type: "select",
+            currentValue: "medium",
+            options: [{ value: "high", name: "High" }],
+          },
+        ],
+      } as unknown as NewSessionResponse;
+
+      const { conn, calls } = makeStubConnection();
+
+      await profile.configureSession({
+        connection: conn,
+        sessionId,
+        session,
+        step: makeStep({ agent, model }),
+        log: () => {},
+      });
+
+      expect(calls).toEqual([
+        `setSessionMode:${agent}`,
+        `unstable_setSessionModel:${model}`,
+      ]);
+    });
+
+    it("fails clearly when a configured variant has no advertised thought-level option", async () => {
+      const profile = resolveIdeProfile(ide);
+      const session = { sessionId: sid } as unknown as NewSessionResponse;
+
+      await expect(
+        profile.configureSession({
+          connection: makeStubConnection().conn,
+          sessionId,
+          session,
+          step: makeStep({ id: `step-${ide}-variant`, agent, model, variant: "high" }),
+          log: () => {},
+        }),
+      ).rejects.toThrow(`Step 'step-${ide}-variant': cannot set model variant 'high'`);
+    });
+
+    it("wraps variant setter errors with the step and variant", async () => {
+      const profile = resolveIdeProfile(ide);
+      const session = {
+        sessionId: sid,
+        configOptions: [
+          {
+            id: "thought-level",
+            name: "Thought level",
+            category: "thought_level",
+            type: "select",
+            currentValue: "medium",
+            options: [{ value: "high", name: "High" }],
+          },
+        ],
+      } as unknown as NewSessionResponse;
+      const { conn } = makeStubConnection({
+        setSessionConfigOption: async () => {
+          throw new Error("unsupported-value");
+        },
+      });
+
+      await expect(
+        profile.configureSession({
+          connection: conn,
+          sessionId,
+          session,
+          step: makeStep({ id: `step-${ide}-variant`, agent, model, variant: "high" }),
+          log: () => {},
+        }),
+      ).rejects.toThrow(
+        `Step 'step-${ide}-variant': failed to set model variant 'high'`,
+      );
     });
 
     it("throws a step-named error when step.agent is not in the advertised mode ids", async () => {

@@ -90,6 +90,25 @@ describe("Workflow.load", () => {
       const workflow = await Workflow.load(path);
       expect(workflow.steps[0].ide).toBe("made-up");
     });
+
+    it("preserves a configured model variant", async () => {
+      const step = { ...VALID_CONFIG.steps[0], variant: "high", edges: [] };
+      const path = await writeTempFile(
+        JSON.stringify({ ...VALID_CONFIG, steps: [step] }),
+      );
+
+      const workflow = await Workflow.load(path);
+
+      expect(workflow.steps[0].variant).toBe("high");
+    });
+
+    it("leaves model variant unset when it is omitted", async () => {
+      const path = await writeTempFile(JSON.stringify(VALID_CONFIG));
+
+      const workflow = await Workflow.load(path);
+
+      expect(workflow.steps[0].variant).toBeUndefined();
+    });
   });
 
   describe("rejection cases", () => {
@@ -256,6 +275,16 @@ describe("Workflow.load", () => {
       expect(err).toBeInstanceOf(WorkflowConfigError);
       expect((err as WorkflowConfigError).message).toContain("step-1");
       expect((err as WorkflowConfigError).message).toContain("ide");
+    });
+
+    it("throws WorkflowConfigError when a provided variant is empty", async () => {
+      const badConfig = {
+        ...VALID_CONFIG,
+        steps: [{ ...VALID_CONFIG.steps[0], variant: "   ", edges: [] }],
+      };
+      const path = await writeTempFile(JSON.stringify(badConfig));
+
+      await expect(Workflow.load(path)).rejects.toThrow("variant");
     });
 
     it("throws WorkflowConfigError for a non-object workflow (e.g. JSON array)", async () => {

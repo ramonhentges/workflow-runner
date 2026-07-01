@@ -64,6 +64,32 @@ async function configureStandardSession({
       `Step '${step.id}': failed to set model '${step.model}': ${err}`,
     );
   }
+
+  if (step.variant === undefined) return;
+
+  const variantOption = session.configOptions?.find(
+    (option) =>
+      option.type === "select" &&
+      (option.category === "thought_level" || option.id === "thought_level"),
+  );
+  if (!variantOption) {
+    throw new Error(
+      `Step '${step.id}': cannot set model variant '${step.variant}' because the agent did not advertise a thought-level option`,
+    );
+  }
+
+  try {
+    await connection.setSessionConfigOption({
+      sessionId,
+      configId: variantOption.id,
+      value: step.variant,
+    });
+    log(`Model variant set: ${step.variant}`);
+  } catch (err) {
+    throw new Error(
+      `Step '${step.id}': failed to set model variant '${step.variant}': ${err}`,
+    );
+  }
 }
 
 const opencodeProfile: IdeProfile = {

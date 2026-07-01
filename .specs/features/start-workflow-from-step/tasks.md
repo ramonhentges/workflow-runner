@@ -5,7 +5,9 @@
 Implement these tasks with the `tlc-spec-driven` skill: activate it by name and follow its Execute flow and Critical Rules. Tests derive from the specification, every gate must pass, and every task receives one atomic commit.
 
 **Design**: `.specs/features/start-workflow-from-step/design.md`
-**Status**: Approved / In Progress
+**Status**: Done — pending standalone verifier
+
+**Task status**: T1 ✅ `fcc2815`; T2 ✅ `f932a55`; T3 ✅ `69c1036`; T4 ✅ `0ca1895`; T5 ✅ `04e3e09`; T6 ✅ `741c193`; T7 ✅ `a04ef79`; T8 ✅ documentation/final gate commit.
 
 ---
 
@@ -19,8 +21,8 @@ Implement these tasks with the `tlc-spec-driven` skill: activate it by name and 
 | RPC adapter | unit | Exact optional-field forwarding, omission compatibility, workflow-error mapping | `src/infra/daemon/handlers/handlers.test.ts` | `bun test src/infra/daemon/handlers/handlers.test.ts` |
 | HTTP schema/route | route integration | Valid field, omission, invalid shape, and `WORKFLOW_INVALID` response | `src/app/api/routes/start-run.test.ts`, `src/app/api/schema.test.ts` | `bun test src/app/api/routes/start-run.test.ts src/app/api/schema.test.ts` |
 | CLI/TUI launch adapter | unit | Both flag forms, missing/empty values, exact RPC payload, attach/error behavior | `src/app/cli.test.ts`, `src/app/commands/start.test.ts` | `bun test src/app/cli.test.ts src/app/commands/start.test.ts` |
-| Web API contract | unit/MSW integration | Optional field serialized exactly and omission unchanged | `web/src/lib/api/client.test.ts` | `bun --cwd web run test -- client.test.ts` |
-| Web component/form | component + MSW integration | Listed selector states/order/reset, manual entry, exact POST payload, retained values/error/no navigation | `web/src/features/start-run/*.test.tsx` | `bun --cwd web run test -- StartRunForm StartStepField` |
+| Web API contract | unit/MSW integration | Optional field serialized exactly and omission unchanged | `web/src/lib/api/client.test.ts` | From `web/`: `bunx vitest run src/lib/api/client.test.ts --coverage.enabled=false` |
+| Web component/form | component + MSW integration | Listed selector states/order/reset, manual entry, exact POST payload, retained values/error/no navigation | `web/src/features/start-run/*.test.tsx` | From `web/`: `bunx vitest run src/features/start-run/StartRunForm.test.tsx src/features/start-run/StartStepField.test.tsx --coverage.enabled=false` |
 | Documentation | none | Build gate only; examples match implemented syntax and API | `README.md` | Build gate |
 
 ## Parallelism Assessment
@@ -36,8 +38,8 @@ Implement these tasks with the `tlc-spec-driven` skill: activate it by name and 
 | Gate Level | When to Use | Command |
 | ---------- | ----------- | ------- |
 | Quick | Focused server or web unit task | Task-specific command from the matrix |
-| Full | Adapter/surface completion | `bun test && bun --cwd web run test` |
-| Build | Phase/final completion | `bun run typecheck && bun run build && bun --cwd web run typecheck && bun --cwd web run build && bun test && bun --cwd web run test` |
+| Full | Adapter/surface completion | `bun test && bun run --cwd web test` |
+| Build | Phase/final completion | `bun run typecheck && bun run build && bun run --cwd web typecheck && bun run --cwd web build && bun test && bun run --cwd web test` |
 
 Baseline before implementation: root suite passed on 2026-07-01 with one pre-existing skipped multi-attach test; web suite is measured separately by its task/full gates.
 
@@ -165,7 +167,7 @@ T4 + T7 ──→ T8
 - [ ] Focused web gate passes with no deleted/skipped tests.
 
 **Tests**: unit/MSW integration
-**Gate**: Quick — `bun --cwd web run test -- client.test.ts`
+**Gate**: Quick — from `web/`, `bunx vitest run src/lib/api/client.test.ts --coverage.enabled=false`
 **Commit**: `feat(web-api): send workflow entry step`
 
 ### T6: Create the Web Start-Step Field [P]
@@ -186,7 +188,7 @@ T4 + T7 ──→ T8
 - [ ] Focused web gate passes with no deleted/skipped tests.
 
 **Tests**: component
-**Gate**: Quick — `bun --cwd web run test -- StartStepField`
+**Gate**: Quick — from `web/`, `bunx vitest run src/features/start-run/StartStepField.test.tsx --coverage.enabled=false`
 **Commit**: `feat(web): add workflow entry-step field`
 
 ### T7: Integrate Entry-Step Selection into Start Form
@@ -207,7 +209,7 @@ T4 + T7 ──→ T8
 - [ ] Focused gate passes with no deleted/skipped tests.
 
 **Tests**: component + MSW integration
-**Gate**: Full — `bun --cwd web run test -- StartRunForm StartStepField`
+**Gate**: Full — from `web/`, `bunx vitest run src/features/start-run/StartRunForm.test.tsx src/features/start-run/StartStepField.test.tsx --coverage.enabled=false`
 **Commit**: `feat(web): start workflows from a selected step`
 
 ### T8: Document and Run the Final Build Gate
@@ -226,7 +228,7 @@ T4 + T7 ──→ T8
 - [ ] Build gate passes with test counts recorded and no new skips.
 
 **Tests**: none — documentation; complete gate verifies implementation
-**Gate**: Build — `bun run typecheck && bun run build && bun --cwd web run typecheck && bun --cwd web run build && bun test && bun --cwd web run test`
+**Gate**: Build — `bun run typecheck && bun run build && bun run --cwd web typecheck && bun run --cwd web build && bun test && bun run --cwd web test`
 **Commit**: `docs: document workflow entry steps`
 
 ---

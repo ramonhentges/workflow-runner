@@ -35,11 +35,19 @@ workflow-runner start workflows/who-is.json
 
 The daemon is auto-spawned on first invocation. `start` auto-attaches a TUI when stdout is a TTY; pass `--detach`/`-d` to start in the background.
 
+To create a fresh run at an exact workflow step, pass its case-sensitive ID:
+
+```bash
+workflow-runner start workflows/who-is.json --step step-2
+```
+
+Steps before `step-2` are not executed or marked visited. Omitting `--step` starts at the first configured step as usual.
+
 ## CLI Surface
 
 | Command                                                | Description                                                                                |
 | ------------------------------------------------------ | ------------------------------------------------------------------------------------------ |
-| `workflow-runner start <workflow.json> [--detach\|-d]` | Start a new run. Auto-attaches the TUI on a TTY, prints `<runId> <slug>` otherwise.        |
+| `workflow-runner start <workflow.json> [--step <step-id>] [--detach\|-d]` | Start a new run, optionally at an exact step ID. Auto-attaches the TUI on a TTY. |
 | `workflow-runner attach [<run-id>]`                    | Attach the TUI to a running run. Resolves an unambiguous prefix of id or slug.             |
 | `workflow-runner ps [--all\|-a]`                       | List runs. Active first, then terminal-state runs from the last 24h.                       |
 | `workflow-runner send <run-id> <message\|->`           | Queue a user message for an interactive run. `-` reads from stdin.                         |
@@ -55,6 +63,8 @@ Global flags: `--help`/`-h`, `--version`.
 ## Web Interface
 
 The daemon also hosts a web UI at `http://127.0.0.1:<port>` (default **4517**; read `daemon.json` for the live port). The sidebar provides a **Workflows** link alongside the run dashboard.
+
+The **Start a Run** form can start a listed workflow at any configured step. Selecting a listed workflow loads an ordered step picker; manual workflow paths accept an optional exact step ID. Leaving the field at **Default (first step)** preserves normal entry behavior.
 
 ### Workflow Management
 
@@ -271,7 +281,7 @@ overridable with `--api-port` or `WORKFLOW_RUNNER_API_PORT`. The live port is al
 | GET    | `/runs`                | List active + recent runs. `?all=true` includes all terminal-state runs.         |
 | GET    | `/runs/:id`            | Run detail snapshot (id or unambiguous slug-prefix). 404 unknown, 409 ambiguous. |
 | GET    | `/runs/:id/events`     | Historical events page. `?fromSeq=N` and/or `?stepId=X`.                         |
-| POST   | `/runs`                | Start a run. Body: `{ "workflowPath": "...", "cwd": "..." }` (both required).    |
+| POST   | `/runs`                | Start a run. Body requires `workflowPath` and `cwd`; optional `startStepId` selects an exact entry step. |
 | POST   | `/runs/:id/stop`       | Stop a run gracefully then forcefully.                                           |
 | POST   | `/runs/:id/retry-step` | Retry the failing step of a crashed/failed/aborted run.                          |
 | GET    | `/workflows?cwd=`      | List `*.json` workflow files in `<cwd>/workflows`.                               |

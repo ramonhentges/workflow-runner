@@ -121,21 +121,21 @@ Additional edge behavior:
 
 | Requirement ID | Story | Phase | Status |
 | -------------- | ----- | ----- | ------ |
-| SFS-01 | Start at exact step | Design | Pending |
-| SFS-02 | Start at exact step | Design | Pending |
-| SFS-03 | Start at exact step | Design | Pending |
-| SFS-04 | Start at exact step | Design | Pending |
-| SFS-05 | Web UI | Design | Pending |
-| SFS-06 | Web UI | Design | Pending |
-| SFS-07 | Web UI | Design | Pending |
-| SFS-08 | Web UI | Design | Pending |
-| SFS-09 | Web UI | Design | Pending |
-| SFS-10 | Terminal/TUI | Design | Pending |
-| SFS-11 | Terminal/TUI | Design | Pending |
-| SFS-12 | Terminal/TUI | Design | Pending |
-| SFS-13 | Terminal/TUI | Design | Pending |
+| SFS-01 | Start at exact step | Execute | Implemented; verification pending |
+| SFS-02 | Start at exact step | Execute | Implemented; verification pending |
+| SFS-03 | Start at exact step | Execute | Implemented; verification pending |
+| SFS-04 | Start at exact step | Execute | Implemented; verification pending |
+| SFS-05 | Web UI | Execute | Implemented; verification pending |
+| SFS-06 | Web UI | Execute | Implemented; verification pending |
+| SFS-07 | Web UI | Execute | Implemented; verification pending |
+| SFS-08 | Web UI | Execute | Implemented; verification pending |
+| SFS-09 | Web UI | Execute | Implemented; verification pending |
+| SFS-10 | Terminal/TUI | Execute | Implemented; verification pending |
+| SFS-11 | Terminal/TUI | Execute | Implemented; verification pending |
+| SFS-12 | Terminal/TUI | Execute | Implemented; verification pending |
+| SFS-13 | Terminal/TUI | Execute | Implemented; verification pending |
 
-**Coverage:** 13 total, 0 mapped to tasks, 13 pending design.
+**Coverage:** 13 total, 13 mapped to completed tasks, 13 pending standalone verification.
 
 ---
 

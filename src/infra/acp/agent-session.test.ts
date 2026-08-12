@@ -169,7 +169,7 @@ describe("IdeDispatchSessionFactory", () => {
 
     expect(spawnCalls).toHaveLength(1);
     expect(spawnCalls[0].cmd).toBe("opencode");
-    expect(spawnCalls[0].args).toEqual(["acp"]);
+    expect(spawnCalls[0].args).toEqual(["acp", "--port", "-1"]);
     expect(spawnCalls[0].env["OPENCODE_ENABLE_QUESTION_TOOL"]).toBe("1");
   });
 

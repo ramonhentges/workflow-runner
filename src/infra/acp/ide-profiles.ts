@@ -96,7 +96,7 @@ const opencodeProfile: IdeProfile = {
   id: "opencode",
   spawn: {
     command: "opencode",
-    args: ["acp"],
+    args: ["acp", "--port", "-1"],
     env: { OPENCODE_ENABLE_QUESTION_TOOL: "1" },
   },
   configureSession: configureStandardSession,

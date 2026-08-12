@@ -81,10 +81,10 @@ describe("PROFILES registry", () => {
     }
   });
 
-  it("'opencode' entry has spawn command 'opencode' and args ['acp']", () => {
+  it("'opencode' entry has spawn command 'opencode' and args ['acp', '--port', '-1']", () => {
     const profile = resolveIdeProfile("opencode");
     expect(profile.spawn.command).toBe("opencode");
-    expect(profile.spawn.args).toEqual(["acp"]);
+    expect(profile.spawn.args).toEqual(["acp", "--port", "-1"]);
     expect(profile.spawn.env?.OPENCODE_ENABLE_QUESTION_TOOL).toBe("1");
   });
 
@@ -214,7 +214,7 @@ describe("availableModeIds", () => {
 // (spawn command/args) are asserted as a single case inside the loop.
 
 const standardProfiles = [
-  { ide: "opencode", command: "opencode", args: ["acp"], sessionId: "sess-1", agent: "architect-advisor", model: "big-pickle" },
+  { ide: "opencode", command: "opencode", args: ["acp", "--port", "-1"], sessionId: "sess-1", agent: "architect-advisor", model: "big-pickle" },
   { ide: "claude-code", command: "npx", args: ["-y", "@zed-industries/claude-code-acp"], sessionId: "sess-cc-1", agent: "sonnet-coder", model: "claude-sonnet-4-6" },
   { ide: "codex", command: "npx", args: ["-y", "@zed-industries/codex-acp"], sessionId: "sess-cx-1", agent: "default", model: "o4-mini" },
   { ide: "gemini", command: "gemini", args: ["--experimental-acp"], sessionId: "sess-gm-1", agent: "gemini-agent", model: "gemini-2.5-pro" },

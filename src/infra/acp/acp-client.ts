@@ -1,49 +1,32 @@
+import { client, methods, type ClientApp } from "@agentclientprotocol/sdk";
 import type {
   SessionNotification,
   RequestPermissionRequest,
   RequestPermissionResponse,
-  WriteTextFileRequest,
-  WriteTextFileResponse,
-  ReadTextFileRequest,
-  ReadTextFileResponse,
 } from "@agentclientprotocol/sdk";
 
-export interface ClientHandlers {
-  log: (msg: string, color?: string) => void;
+export interface AcpClientHandlers {
   requestPermission: (
     params: RequestPermissionRequest,
   ) => Promise<RequestPermissionResponse>;
-  sessionUpdate?: (params: SessionNotification) => Promise<void>;
-  writeTextFile?: (
-    params: WriteTextFileRequest,
-  ) => Promise<WriteTextFileResponse>;
-  readTextFile?: (params: ReadTextFileRequest) => Promise<ReadTextFileResponse>;
+  sessionUpdate?: (notification: SessionNotification) => void;
+  writeTextFile?: (path: string, content: string) => Promise<void>;
+  readTextFile?: (path: string) => Promise<string>;
 }
 
-export class AcpClient {
-  constructor(private handlers: ClientHandlers) {}
-
-  requestPermission(
-    params: RequestPermissionRequest,
-  ): Promise<RequestPermissionResponse> {
-    return this.handlers.requestPermission(params);
-  }
-
-  sessionUpdate(params: SessionNotification): Promise<void> {
-    return this.handlers.sessionUpdate?.(params) ?? Promise.resolve();
-  }
-
-  writeTextFile(
-    params: WriteTextFileRequest,
-  ): Promise<WriteTextFileResponse> {
-    return this.handlers.writeTextFile?.(params) ?? Promise.resolve({});
-  }
-
-  readTextFile(
-    params: ReadTextFileRequest,
-  ): Promise<ReadTextFileResponse> {
-    return (
-      this.handlers.readTextFile?.(params) ?? Promise.resolve({ content: "" })
-    );
-  }
+export function createAcpClientApp(handlers: AcpClientHandlers): ClientApp {
+  return client({ name: "workflow-runner" })
+    .onRequest(methods.client.session.requestPermission, (ctx) =>
+      handlers.requestPermission(ctx.params),
+    )
+    .onNotification(methods.client.session.update, (ctx) => {
+      handlers.sessionUpdate?.(ctx.params);
+    })
+    .onRequest(methods.client.fs.writeTextFile, async (ctx) => {
+      await handlers.writeTextFile?.(ctx.params.path, ctx.params.content);
+    })
+    .onRequest(methods.client.fs.readTextFile, async (ctx) => {
+      const content = (await handlers.readTextFile?.(ctx.params.path)) ?? "";
+      return { content };
+    });
 }

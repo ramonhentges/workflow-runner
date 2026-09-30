@@ -74,7 +74,7 @@ src/
 - `acp/ide-profile.ts` — `IdeProfile` value type (spawn spec + `configureSession` hook) and `UnknownIdeError`.
 - `acp/ide-profiles.ts` — static registry of the four supported profiles (`opencode`, `claude-code`, `codex`, `gemini`); exports `PROFILES` map and `resolveIdeProfile(ide)`.
 - `acp/agent-session.ts` — spawns the IDE subprocess for the current step (selected by `step.ide` via the profile registry), connects via ACP over stdin/stdout, registers the MCP server as a workflow tool server, and sends the kickoff prompt. `dispose()` SIGTERM-then-SIGKILL cleans up the subprocess.
-- `acp/acp-client.ts` — thin handler-based wrapper over `@agentclientprotocol/sdk`'s `ClientSideConnection`
+- `acp/acp-client.ts` — `createAcpClientApp(handlers)`: builds the SDK's `client()` app (1.5.x API) with typed `requestPermission`/`sessionUpdate`/fs handler registrations per agent session
 - `tui/tui.ts` — terminal UI built on `@opentui/core`; consumes a `TuiEventSource` (live event stream + `sendInput`/`detach`) rather than a `Runner` directly. `/detach` cleanly closes the subscription; Ctrl-C / `/quit` kill the TUI only and leave the run alive.
 - `daemon/` — daemon entry, `RunManager`, event log, run store, JSON-RPC server, and per-method handlers
 - `client/` — UDS JSON-RPC client with auto-spawn-on-missing-socket and CLI output formatting

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "bun:test";
-import type { ClientSideConnection, NewSessionResponse } from "@agentclientprotocol/sdk";
-import { resolveIdeProfile, availableModeIds, PROFILES } from "./ide-profiles.js";
-import { UnknownIdeError } from "./ide-profile.js";
+import type { NewSessionResponse } from "@agentclientprotocol/sdk";
+import { resolveIdeProfile, availableModeIds, availableModelOptions, PROFILES } from "./ide-profiles.js";
+import { UnknownIdeError, type SessionConfigConnection } from "./ide-profile.js";
 import { asSessionId, asStepId } from "../../domain/ids.js";
 import type { Step } from "../../domain/workflow.js";
 
@@ -22,26 +22,22 @@ function makeStep(
 
 function makeStubConnection(overrides: {
   setSessionMode?: (args: { sessionId: string; modeId: string }) => Promise<void>;
-  unstable_setSessionModel?: (args: { sessionId: string; modelId: string }) => Promise<void>;
   setSessionConfigOption?: (args: {
     sessionId: string;
     configId: string;
     value: string;
   }) => Promise<unknown>;
-} = {}): { conn: ClientSideConnection; calls: string[] } {
+} = {}): { conn: SessionConfigConnection; calls: string[] } {
   const calls: string[] = [];
   const conn = {
     setSessionMode: overrides.setSessionMode ?? (async ({ modeId }: { sessionId: string; modeId: string }) => {
       calls.push(`setSessionMode:${modeId}`);
     }),
-    unstable_setSessionModel: overrides.unstable_setSessionModel ?? (async ({ modelId }: { sessionId: string; modelId: string }) => {
-      calls.push(`unstable_setSessionModel:${modelId}`);
-    }),
     setSessionConfigOption: overrides.setSessionConfigOption ?? (async ({ configId, value }: { sessionId: string; configId: string; value: string }) => {
       calls.push(`setSessionConfigOption:${configId}:${value}`);
       return { configOptions: [] };
     }),
-  } as unknown as ClientSideConnection;
+  } as unknown as SessionConfigConnection;
   return { conn, calls };
 }
 
@@ -204,6 +200,95 @@ describe("availableModeIds", () => {
   });
 });
 
+// --- availableModelOptions tests ---
+
+describe("availableModelOptions", () => {
+  it("returns options from a configOptions 'model' select by id", () => {
+    const session = {
+      sessionId: "s1",
+      configOptions: [
+        {
+          type: "select",
+          id: "model",
+          currentValue: "model-x",
+          options: [
+            { value: "model-x", name: "Model X" },
+            { value: "model-y", name: "Model Y" },
+          ],
+        },
+      ],
+    } as unknown as NewSessionResponse;
+
+    expect(availableModelOptions(session)).toEqual([
+      { value: "model-x", name: "Model X" },
+      { value: "model-y", name: "Model Y" },
+    ]);
+  });
+
+  it("returns options from a configOptions select matched by category 'model'", () => {
+    const session = {
+      sessionId: "s1",
+      configOptions: [
+        {
+          type: "select",
+          id: "default-model",
+          category: "model",
+          currentValue: "gpt-4o",
+          options: [{ value: "gpt-4o", name: "GPT-4o" }],
+        },
+      ],
+    } as unknown as NewSessionResponse;
+
+    expect(availableModelOptions(session)).toEqual([
+      { value: "gpt-4o", name: "GPT-4o" },
+    ]);
+  });
+
+  it("flattens grouped model options", () => {
+    const session = {
+      sessionId: "s1",
+      configOptions: [
+        {
+          type: "select",
+          id: "model",
+          options: [
+            {
+              group: "openai",
+              options: [{ value: "gpt-4o", name: "GPT-4o" }],
+            },
+            { value: "claude", name: "Claude" },
+          ],
+        },
+      ],
+    } as unknown as NewSessionResponse;
+
+    expect(availableModelOptions(session)).toEqual([
+      { value: "gpt-4o", name: "GPT-4o" },
+      { value: "claude", name: "Claude" },
+    ]);
+  });
+
+  it("returns [] when no model configOption is advertised", () => {
+    const session = {
+      sessionId: "s1",
+      configOptions: [
+        {
+          type: "select",
+          id: "mode",
+          options: [{ value: "a", name: "A" }],
+        },
+      ],
+    } as unknown as NewSessionResponse;
+
+    expect(availableModelOptions(session)).toEqual([]);
+  });
+
+  it("returns [] when configOptions is unset", () => {
+    const session = { sessionId: "s1" } as unknown as NewSessionResponse;
+    expect(availableModelOptions(session)).toEqual([]);
+  });
+});
+
 // --- configureSession tests (all profiles) ---
 //
 // Every profile (opencode, claude-code, codex, gemini) now shares the
@@ -251,7 +336,7 @@ describe.each(standardProfiles)(
       });
 
       expect(calls).toContain(`setSessionMode:${agent}`);
-      expect(calls).toContain(`unstable_setSessionModel:${model}`);
+      expect(calls).toContain(`setSessionConfigOption:model:${model}`);
     });
 
     it("sets an advertised thought-level option to step.variant after the model", async () => {
@@ -286,7 +371,7 @@ describe.each(standardProfiles)(
 
       expect(calls).toEqual([
         `setSessionMode:${agent}`,
-        `unstable_setSessionModel:${model}`,
+        `setSessionConfigOption:model:${model}`,
         "setSessionConfigOption:reasoning-effort:high",
       ]);
     });
@@ -319,7 +404,7 @@ describe.each(standardProfiles)(
 
       expect(calls).toEqual([
         `setSessionMode:${agent}`,
-        `unstable_setSessionModel:${model}`,
+        `setSessionConfigOption:model:${model}`,
       ]);
     });
 
@@ -354,8 +439,11 @@ describe.each(standardProfiles)(
         ],
       } as unknown as NewSessionResponse;
       const { conn } = makeStubConnection({
-        setSessionConfigOption: async () => {
-          throw new Error("unsupported-value");
+        // Model set succeeds; only the variant call fails (both go through
+        // setSessionConfigOption now).
+        setSessionConfigOption: async ({ configId }) => {
+          if (configId !== "model") throw new Error("unsupported-value");
+          return { configOptions: [] };
         },
       });
 
@@ -417,7 +505,7 @@ describe.each(standardProfiles)(
       });
 
       expect(calls).toContain("setSessionMode:any-persona");
-      expect(calls).toContain(`unstable_setSessionModel:${model}`);
+      expect(calls).toContain(`setSessionConfigOption:model:${model}`);
     });
 
     it("logs 'Mode set' and 'Model set' after successful calls", async () => {
@@ -467,12 +555,12 @@ describe.each(standardProfiles)(
       expect((err as Error).message).toContain("unsupported-persona");
     });
 
-    it("wraps unstable_setSessionModel errors with a step-named message", async () => {
+    it("wraps setSessionConfigOption errors with a step-named message", async () => {
       const profile = resolveIdeProfile(ide);
       const session = { sessionId: sid } as unknown as NewSessionResponse;
 
       const { conn } = makeStubConnection({
-        unstable_setSessionModel: async () => { throw new Error("model-unsupported"); },
+        setSessionConfigOption: async () => { throw new Error("model-unsupported"); },
       });
       const step = makeStep({ id: `step-${ide}-m`, agent: "some-persona", model: "unsupported-model" });
 

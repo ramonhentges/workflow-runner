@@ -1,7 +1,8 @@
 import type {
   NewSessionResponse,
-  SessionConfigSelectOption,
+  SessionConfigSelect,
   SessionConfigSelectGroup,
+  SessionConfigSelectOption,
 } from "@agentclientprotocol/sdk";
 import { UnknownIdeError, type IdeProfile } from "./ide-profile.js";
 
@@ -18,15 +19,42 @@ export function availableModeIds(result: NewSessionResponse): string[] {
   const standard = result.modes?.availableModes?.map((m) => m.id);
   if (standard && standard.length > 0) return standard;
 
-  const modeOption = result.configOptions?.find(
-    (o) => o.type === "select" && (o.id === "mode" || o.category === "mode"),
-  );
-  if (!modeOption || modeOption.type !== "select") return [];
+  const modeOption = findConfigSelect(result, "mode");
+  if (!modeOption) return [];
 
-  return modeOption.options.flatMap((entry) =>
+  return flattenSelectOptions(modeOption.options).map((o) => o.value);
+}
+
+export function availableModelOptions(
+  result: NewSessionResponse,
+): Array<{ value: string; name: string }> {
+  const modelOption = findConfigSelect(result, "model");
+  if (!modelOption) return [];
+
+  return flattenSelectOptions(modelOption.options).map((o) => ({
+    value: o.value,
+    name: o.name,
+  }));
+}
+
+function findConfigSelect(
+  result: NewSessionResponse,
+  key: "mode" | "model",
+): SessionConfigSelect | null {
+  const option = result.configOptions?.find(
+    (o) => o.type === "select" && (o.id === key || o.category === key),
+  );
+  if (!option || option.type !== "select") return null;
+  return option;
+}
+
+function flattenSelectOptions(
+  options: readonly (SessionConfigSelectOption | SessionConfigSelectGroup)[],
+): Array<{ value: string; name: string }> {
+  return options.flatMap((entry) =>
     "group" in entry
-      ? (entry as SessionConfigSelectGroup).options.map((o) => o.value)
-      : [(entry as SessionConfigSelectOption).value],
+      ? entry.options.map((o) => ({ value: o.value, name: o.name }))
+      : [{ value: entry.value, name: entry.name }],
   );
 }
 
@@ -54,9 +82,10 @@ async function configureStandardSession({
   log(`Mode set: ${step.agent}`);
 
   try {
-    await connection.unstable_setSessionModel({
+    await connection.setSessionConfigOption({
       sessionId,
-      modelId: step.model,
+      configId: "model",
+      value: step.model,
     });
     log(`Model set: ${step.model}`);
   } catch (err) {
@@ -96,7 +125,7 @@ const opencodeProfile: IdeProfile = {
   id: "opencode",
   spawn: {
     command: "opencode",
-    args: ["acp", "--port", "-1"],
+    args: ["acp"],
     env: { OPENCODE_ENABLE_QUESTION_TOOL: "1" },
   },
   configureSession: configureStandardSession,

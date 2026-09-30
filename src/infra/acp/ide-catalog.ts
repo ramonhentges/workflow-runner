@@ -1,8 +1,20 @@
-import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
+import {
+  spawn,
+  type ChildProcess,
+  type SpawnOptions,
+} from "node:child_process";
 import { Writable, Readable } from "node:stream";
-import { ClientSideConnection, ndJsonStream } from "@agentclientprotocol/sdk";
-import { AcpClient } from "./acp-client.js";
-import { resolveIdeProfile, availableModeIds } from "./ide-profiles.js";
+import {
+  methods,
+  ndJsonStream,
+  type ClientConnection,
+} from "@agentclientprotocol/sdk";
+import { createAcpClientApp } from "./acp-client.js";
+import {
+  resolveIdeProfile,
+  availableModeIds,
+  availableModelOptions,
+} from "./ide-profiles.js";
 import { UnknownIdeError } from "./ide-profile.js";
 
 export interface IdeCatalogEntry {
@@ -17,7 +29,11 @@ export interface IdeCatalog {
   reason?: string;
 }
 
-type SpawnFn = (cmd: string, args: string[], opts: SpawnOptions) => ChildProcess;
+type SpawnFn = (
+  cmd: string,
+  args: string[],
+  opts: SpawnOptions,
+) => ChildProcess;
 
 export async function probeIdeCatalog(
   ide: string,
@@ -42,7 +58,9 @@ export async function probeIdeCatalog(
     await new Promise<void>((resolve, reject) => {
       agentProcess!.once("error", (err) =>
         reject(
-          new Error(`Failed to spawn '${profile.spawn.command}': ${String(err)}`),
+          new Error(
+            `Failed to spawn '${profile.spawn.command}': ${String(err)}`,
+          ),
         ),
       );
       agentProcess!.once("spawn", resolve);
@@ -56,16 +74,21 @@ export async function probeIdeCatalog(
     ) as ReadableStream<Uint8Array>;
     const stream = ndJsonStream(writable, readable);
 
-    const acpClient = new AcpClient({
-      log: () => {},
+    const app = createAcpClientApp({
       requestPermission: async () => ({ outcome: { outcome: "cancelled" } }),
     });
 
-    const connection = new ClientSideConnection(() => acpClient, stream);
+    const connection: ClientConnection = app.connect(stream);
 
-    await connection.initialize({ protocolVersion: 1, clientCapabilities: {} });
+    await connection.agent.request(methods.agent.initialize, {
+      protocolVersion: 1,
+      clientCapabilities: {},
+    });
 
-    const sessionResult = await connection.newSession({ cwd, mcpServers: [] });
+    const sessionResult = await connection.agent.request(
+      methods.agent.session.new,
+      { cwd, mcpServers: [] },
+    );
 
     const standardModes = sessionResult.modes?.availableModes;
     const agents: IdeCatalogEntry[] =
@@ -73,11 +96,9 @@ export async function probeIdeCatalog(
         ? standardModes.map((m) => ({ id: m.id, name: m.name }))
         : availableModeIds(sessionResult).map((id) => ({ id, name: id }));
 
-    const models: IdeCatalogEntry[] =
-      sessionResult.models?.availableModels?.map((m) => ({
-        id: m.modelId,
-        name: m.name,
-      })) ?? [];
+    const models: IdeCatalogEntry[] = availableModelOptions(sessionResult).map(
+      ({ value, name }) => ({ id: value, name }),
+    );
 
     return { reachable: true, agents, models };
   }

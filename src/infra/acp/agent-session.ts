@@ -1,26 +1,30 @@
-import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
+import {
+  spawn,
+  type ChildProcess,
+  type SpawnOptions,
+} from "node:child_process";
 import { Writable, Readable } from "node:stream";
-import { ClientSideConnection, ndJsonStream } from "@agentclientprotocol/sdk";
-import type {
-  SessionNotification,
-  RequestPermissionRequest,
-  RequestPermissionResponse,
-  WriteTextFileRequest,
-  WriteTextFileResponse,
-  ReadTextFileRequest,
-  ReadTextFileResponse,
+import {
+  methods,
+  ndJsonStream,
+  PROTOCOL_VERSION,
+  type ClientConnection,
+  type SessionNotification,
 } from "@agentclientprotocol/sdk";
-
 import type { Step } from "../../domain/workflow.js";
 import type { StepOutcome } from "../../domain/outcome.js";
-import { asSessionId, type SessionId, type StepToken } from "../../domain/ids.js";
+import {
+  asSessionId,
+  type SessionId,
+  type StepToken,
+} from "../../domain/ids.js";
 import type {
   InboundMessage,
   RunnerAgentSessionFactory,
   ToolCallView,
 } from "../../domain/runner.js";
-import { AcpClient } from "./acp-client.js";
-import type { IdeProfile } from "./ide-profile.js";
+import { createAcpClientApp } from "./acp-client.js";
+import type { IdeProfile, SessionConfigConnection } from "./ide-profile.js";
 import { resolveIdeProfile } from "./ide-profiles.js";
 import { ToolCallAccumulator } from "./tool-call-accumulator.js";
 
@@ -127,7 +131,7 @@ export class AgentSession {
   readonly sessionId: SessionId;
 
   #process: ChildProcess;
-  #connection: ClientSideConnection;
+  #connection: ClientConnection;
   #sink: AgentSessionSink;
   #disposed = false;
 
@@ -136,7 +140,7 @@ export class AgentSession {
     outcome: Promise<StepOutcome>;
     sessionId: SessionId;
     process: ChildProcess;
-    connection: ClientSideConnection;
+    connection: ClientConnection;
     sink: AgentSessionSink;
   }) {
     this.mode = init.mode;
@@ -199,11 +203,8 @@ export class AgentSession {
       // to this session and discarded when it ends (ids are unique per session).
       const toolCalls = new ToolCallAccumulator();
 
-      const acpClient = new AcpClient({
-        log: (msg, color) => sink.log(msg, color),
-        requestPermission: async (
-          params: RequestPermissionRequest,
-        ): Promise<RequestPermissionResponse> => {
+      const app = createAcpClientApp({
+        requestPermission: async (params) => {
           sink.log(`Permission requested: ${params.toolCall.title}`);
           sink.log(`  Kind: ${params.toolCall.kind}`);
           for (const loc of params.toolCall.locations ?? []) {
@@ -224,27 +225,23 @@ export class AgentSession {
           sink.log("No non-reject option available, cancelling");
           return { outcome: { outcome: "cancelled" } };
         },
-        sessionUpdate: async (params: SessionNotification): Promise<void> => {
-          handleSessionUpdate(params.update, cwd, sink, toolCalls);
+        sessionUpdate: (notification) => {
+          handleSessionUpdate(notification.update, cwd, sink, toolCalls);
         },
-        writeTextFile: async (
-          params: WriteTextFileRequest,
-        ): Promise<WriteTextFileResponse> => {
+        writeTextFile: async (path, content) => {
           const { writeFile } = await import("node:fs/promises");
-          await writeFile(params.path, params.content, "utf-8");
-          sink.log(`Wrote ${params.path}`);
-          return {};
+          await writeFile(path, content, "utf-8");
+          sink.log(`Wrote ${path}`);
         },
-        readTextFile: async (
-          params: ReadTextFileRequest,
-        ): Promise<ReadTextFileResponse> => {
+        readTextFile: async (path) => {
           const { readFile } = await import("node:fs/promises");
-          const content = await readFile(params.path, "utf-8");
-          return { content };
+          return readFile(path, "utf-8");
         },
       });
 
-      const connection = new ClientSideConnection(() => acpClient, stream);
+      // Long-lived connection: the session outlives the factory call, so the
+      // app is connected (not connectWith) and closed explicitly in dispose().
+      const connection = app.connect(stream);
 
       let outcomeResolve: (outcome: StepOutcome) => void;
       const toolOutcomePromise = new Promise<StepOutcome>((resolve) => {
@@ -252,39 +249,52 @@ export class AgentSession {
       });
       const stepToken = tools.beginStep(step, outcomeResolve!);
 
-      const initResult = await connection.initialize({
-        protocolVersion: 1,
-        clientCapabilities: {
-          fs: { readTextFile: true, writeTextFile: true },
+      const initResult = await connection.agent.request(
+        methods.agent.initialize,
+        {
+          protocolVersion: PROTOCOL_VERSION,
+          clientCapabilities: {
+            fs: { readTextFile: true, writeTextFile: true },
+          },
         },
-      });
+      );
 
-      if (
-        !(initResult as { agentCapabilities?: { mcpCapabilities?: { http?: unknown } } })
-          .agentCapabilities?.mcpCapabilities?.http
-      ) {
+      if (!initResult.agentCapabilities?.mcpCapabilities?.http) {
         throw new Error(
           "Agent does not support HTTP MCP capabilities, which are required for workflow orchestration",
         );
       }
 
-      const sessionResult = await connection.newSession({
-        cwd,
-        mcpServers: [
-          {
-            type: "http",
-            name: "workflow",
-            url: tools.url,
-            headers: [{ name: "x-workflow-step-token", value: stepToken }],
-          },
-        ],
-      });
+      const sessionResult = await connection.agent.request(
+        methods.agent.session.new,
+        {
+          cwd,
+          mcpServers: [
+            {
+              type: "http",
+              name: "workflow",
+              url: tools.url,
+              headers: [{ name: "x-workflow-step-token", value: stepToken }],
+            },
+          ],
+        },
+      );
 
       const sessionId = asSessionId(sessionResult.sessionId);
       sink.log(`Session created: ${sessionId}`);
 
+      const configConnection: SessionConfigConnection = {
+        setSessionMode: (configArgs) =>
+          connection.agent.request(methods.agent.session.setMode, configArgs),
+        setSessionConfigOption: (configArgs) =>
+          connection.agent.request(
+            methods.agent.session.setConfigOption,
+            configArgs,
+          ),
+      };
+
       await profile.configureSession({
-        connection,
+        connection: configConnection,
         sessionId,
         session: sessionResult,
         step,
@@ -309,16 +319,20 @@ export class AgentSession {
       let finalOutcomePromise: Promise<StepOutcome>;
 
       if (step.mode === "autonomous") {
-        const kickoffPromise = connection.prompt({
-          sessionId,
-          prompt: [{ type: "text", text: kickoffPrompt }],
-        });
+        const kickoffPromise = connection.agent.request(
+          methods.agent.session.prompt,
+          {
+            sessionId,
+            prompt: [{ type: "text", text: kickoffPrompt }],
+          },
+        );
 
         const noToolFailure = kickoffPromise.then(
           (): StepOutcome => ({
             kind: "failure",
             failedStep: step.id,
-            reason: "Autonomous step completed without calling handoff or finish",
+            reason:
+              "Autonomous step completed without calling handoff or finish",
           }),
         );
 
@@ -329,8 +343,8 @@ export class AgentSession {
         ]);
       } else {
         // Interactive: fire kickoff and log stopReason; tool outcome comes via user-driven prompts.
-        connection
-          .prompt({
+        connection.agent
+          .request(methods.agent.session.prompt, {
             sessionId,
             prompt: [{ type: "text", text: kickoffPrompt }],
           })
@@ -372,10 +386,13 @@ export class AgentSession {
   async sendUserInput(text: string): Promise<void> {
     if (this.mode !== "interactive") return;
     try {
-      const result = await this.#connection.prompt({
-        sessionId: this.sessionId,
-        prompt: [{ type: "text", text }],
-      });
+      const result = await this.#connection.agent.request(
+        methods.agent.session.prompt,
+        {
+          sessionId: this.sessionId,
+          prompt: [{ type: "text", text }],
+        },
+      );
       this.#sink.log(`[${result.stopReason}]`);
     } catch (err) {
       const msg = String(err);
@@ -400,10 +417,13 @@ export class AgentSession {
     this.#process.stdout?.removeAllListeners("data");
 
     try {
-      await this.#connection.cancel({ sessionId: this.sessionId });
+      await this.#connection.agent.notify(methods.agent.session.cancel, {
+        sessionId: this.sessionId,
+      });
     } catch {
       // ignore
     }
+    this.#connection.close();
 
     if (this.#process.exitCode !== null) return;
 

@@ -71,14 +71,21 @@ function makeStubAcpProcess(opts: StubAcpOptions): {
                     currentModeId: opts.modes[0]?.id ?? "",
                   }
                 : null,
-            models:
-              opts.models && opts.models.length > 0
-                ? {
-                    availableModels: opts.models,
-                    currentModelId: opts.models[0]?.modelId ?? "",
-                  }
-                : null,
-            configOptions: opts.configOptions ?? null,
+            configOptions: opts.models && opts.models.length > 0
+              ? [
+                  {
+                    type: "select",
+                    id: "model",
+                    category: "model",
+                    name: "Model",
+                    currentValue: opts.models[0]?.modelId ?? "",
+                    options: opts.models.map((m) => ({
+                      value: m.modelId,
+                      name: m.name,
+                    })),
+                  },
+                ]
+              : (opts.configOptions ?? null),
           };
         }
 
